@@ -12,7 +12,7 @@ TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
-#define GPS_RX 34
+#define GPS_RX 17
 
 
 void updateGPS()
@@ -136,9 +136,9 @@ void turnToPoint(double targetLat, double targetLon)
 
   
   if (turnAngle > 10) {
-    Serial.print("Turn right");
+    Serial.println("Turn right");
   } else if (turnAngle < -10) {
-    Serial.print("Turn left");
+    Serial.println("Turn left");
   } else {
     Serial.println("Already facing the target point");
   }
@@ -148,7 +148,7 @@ void turnToPoint(double targetLat, double targetLon)
 void loop() {
   readBNOsensor();
   Serial.println("sats");
-  Serial.print(gps.satellites.value());
+  Serial.println(gps.satellites.value());
   delay(1000);
   updateGPS();
   GetGPSData();
