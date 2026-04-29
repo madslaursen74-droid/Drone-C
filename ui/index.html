@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Drone-C Nav Control</title>
+    <title>Boat Nav Console</title>
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -13,125 +13,425 @@
     <style>
       :root {
         color-scheme: dark;
-        font-family: Inter, Arial, sans-serif;
+        --bg: #09111f;
+        --panel: rgba(7, 16, 31, 0.9);
+        --panel-border: rgba(148, 163, 184, 0.18);
+        --panel-soft: rgba(15, 23, 42, 0.86);
+        --text: #e5eefb;
+        --muted: #93a4bc;
+        --accent: #38bdf8;
+        --accent-strong: #0ea5e9;
+        --good: #34d399;
+        --warn: #fbbf24;
+        --danger: #fb7185;
+        --shadow: 0 18px 40px rgba(2, 6, 23, 0.34);
       }
 
       * {
         box-sizing: border-box;
       }
 
-      body {
-        margin: 0;
-        background: #111827;
-        color: #e5e7eb;
+      html, body {
+        height: 100%;
       }
 
-      .layout {
+      body {
+        margin: 0;
+        font-family: Inter, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app {
         display: grid;
-        grid-template-columns: 320px 1fr;
+        grid-template-columns: 360px 1fr;
         min-height: 100vh;
       }
 
-      .panel {
-        padding: 20px;
-        border-right: 1px solid #1f2937;
-        background: #0f172a;
+      .sidebar {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 18px;
+        background:
+          linear-gradient(180deg, rgba(8, 15, 30, 0.96), rgba(6, 12, 24, 0.92));
+        border-right: 1px solid var(--panel-border);
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        padding: 16px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--danger);
+        box-shadow: 0 0 0 4px rgba(251, 113, 133, 0.15);
+      }
+
+      .status-dot.connected {
+        background: var(--good);
+        box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.15);
       }
 
       h1 {
-        margin: 0 0 16px;
-        font-size: 24px;
+        margin: 10px 0 4px;
+        font-size: 26px;
+        line-height: 1.1;
       }
 
-      .controls {
-        display: grid;
-        gap: 12px;
-      }
-
-      button {
-        border: 0;
-        border-radius: 8px;
-        padding: 12px 14px;
-        font-size: 14px;
-        font-weight: 600;
-        cursor: pointer;
-        background: #2563eb;
-        color: white;
-      }
-
-      button.secondary {
-        background: #334155;
-      }
-
-      .meta {
-        margin-top: 16px;
-        padding: 14px;
-        border-radius: 8px;
-        background: #111827;
-        border: 1px solid #1f2937;
+      .hero p {
+        margin: 0;
+        color: var(--muted);
         font-size: 14px;
         line-height: 1.5;
       }
 
-      .meta strong {
-        display: inline-block;
-        min-width: 90px;
+      .button-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        padding: 16px;
+      }
+
+      button {
+        appearance: none;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 12px 14px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        background: var(--panel-soft);
+        color: var(--text);
+        transition: 120ms ease;
+      }
+
+      button:hover:enabled {
+        border-color: rgba(56, 189, 248, 0.45);
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      .primary {
+        background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+        color: #04131f;
+      }
+
+      .danger {
+        background: rgba(127, 29, 29, 0.88);
+        color: #ffe4e6;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        padding: 16px;
+      }
+
+      .stat {
+        padding: 12px;
+        background: rgba(15, 23, 42, 0.74);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-radius: 8px;
+        min-height: 78px;
+      }
+
+      .stat-label {
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .stat-value {
+        margin-top: 8px;
+        font-size: 20px;
+        font-weight: 700;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
+      }
+
+      .detail-list {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+      }
+
+      .detail {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      }
+
+      .detail:last-child {
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+
+      .detail-label {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .detail-value {
+        text-align: right;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+
+      .section-title {
+        padding: 14px 16px 0;
+        font-size: 13px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .log {
+        margin: 0;
+        padding: 12px 16px 16px;
+        min-height: 154px;
+        max-height: 220px;
+        overflow: auto;
+        color: #bae6fd;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+
+      .map-shell {
+        position: relative;
+        min-height: 100vh;
+        background: #020617;
       }
 
       #map {
         width: 100%;
-        min-height: 100vh;
+        height: 100vh;
       }
 
-      pre {
-        margin: 16px 0 0;
-        padding: 12px;
+      .map-overlay {
+        position: absolute;
+        top: 18px;
+        left: 18px;
+        right: 18px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 14px;
+        pointer-events: none;
+      }
+
+      .map-banner,
+      .map-chip {
+        pointer-events: auto;
+        padding: 12px 14px;
+        background: rgba(6, 11, 22, 0.84);
+        border: 1px solid rgba(148, 163, 184, 0.18);
         border-radius: 8px;
-        background: #020617;
-        border: 1px solid #1f2937;
-        color: #93c5fd;
-        font-size: 12px;
-        white-space: pre-wrap;
+        backdrop-filter: blur(10px);
+        box-shadow: var(--shadow);
       }
 
-      @media (max-width: 900px) {
-        .layout {
+      .map-banner strong,
+      .map-chip strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 13px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .map-banner span,
+      .map-chip span {
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      .boat-marker {
+        position: relative;
+        width: 28px;
+        height: 28px;
+        transform-origin: 50% 50%;
+      }
+
+      .boat-marker::before {
+        content: "";
+        position: absolute;
+        inset: 6px;
+        border-radius: 50%;
+        background: #38bdf8;
+        border: 3px solid rgba(255, 255, 255, 0.92);
+        box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.16);
+      }
+
+      .boat-marker::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: -2px;
+        transform: translateX(-50%);
+        width: 0;
+        height: 0;
+        border-left: 7px solid transparent;
+        border-right: 7px solid transparent;
+        border-bottom: 12px solid #e0f2fe;
+      }
+
+      .target-marker {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #f59e0b;
+        border: 3px solid rgba(255, 255, 255, 0.85);
+        box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.16);
+      }
+
+      @media (max-width: 1024px) {
+        .app {
           grid-template-columns: 1fr;
         }
 
-        .panel {
+        .sidebar {
           border-right: 0;
-          border-bottom: 1px solid #1f2937;
+          border-bottom: 1px solid var(--panel-border);
         }
 
+        .map-shell,
         #map {
-          min-height: 60vh;
+          min-height: 65vh;
+          height: 65vh;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .button-grid,
+        .stats {
+          grid-template-columns: 1fr;
+        }
+
+        .map-overlay {
+          flex-direction: column;
         }
       }
     </style>
   </head>
   <body>
-    <div class="layout">
-      <aside class="panel">
-        <h1>Boat Nav</h1>
-        <div class="controls">
-          <button id="connectButton">Connect ESP32</button>
-          <button id="sendWaypointButton" class="secondary" disabled>Send waypoint</button>
-          <button id="stopButton" class="secondary" disabled>Stop boat</button>
-          <button id="statusButton" class="secondary" disabled>Request status</button>
-        </div>
+    <div class="app">
+      <aside class="sidebar">
+        <section class="card hero">
+          <div class="eyebrow">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="serialStatus">Disconnected</span>
+          </div>
+          <h1>Boat Nav Console</h1>
+          <p>Choose a waypoint on the map, connect the ESP32, and send the target when the boat is ready.</p>
+        </section>
 
-        <div class="meta">
-          <div><strong>Serial:</strong> <span id="serialStatus">Disconnected</span></div>
-          <div><strong>Target:</strong> <span id="targetStatus">Not selected</span></div>
-          <div><strong>ESP32:</strong> <span id="liveStatus">Waiting for data</span></div>
-          <div><strong>Hint:</strong> Click the map to place a waypoint.</div>
-        </div>
+        <section class="card">
+          <div class="button-grid">
+            <button id="connectButton" class="primary">Connect</button>
+            <button id="statusButton" disabled>Refresh</button>
+            <button id="sendWaypointButton" disabled>Send Waypoint</button>
+            <button id="stopButton" class="danger" disabled>Stop</button>
+          </div>
+        </section>
 
-        <pre id="log">Open this page in Edge or Chrome on localhost, then connect the ESP32.</pre>
+        <section class="card">
+          <div class="section-title">Live Status</div>
+          <div class="stats">
+            <div class="stat">
+              <div class="stat-label">Mode</div>
+              <div class="stat-value" id="modeValue">Idle</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Satellites</div>
+              <div class="stat-value" id="satValue">-</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Heading</div>
+              <div class="stat-value" id="headingValue">-</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Distance</div>
+              <div class="stat-value" id="distanceValue">-</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-title">Telemetry</div>
+          <div class="detail-list">
+            <div class="detail">
+              <span class="detail-label">Boat Position</span>
+              <span class="detail-value" id="boatPositionValue">Waiting for GPS</span>
+            </div>
+            <div class="detail">
+              <span class="detail-label">Selected Target</span>
+              <span class="detail-value" id="targetValue">Not selected</span>
+            </div>
+            <div class="detail">
+              <span class="detail-label">GPS Quality</span>
+              <span class="detail-value" id="gpsQualityValue">-</span>
+            </div>
+            <div class="detail">
+              <span class="detail-label">Compass Calibration</span>
+              <span class="detail-value" id="calibrationValue">-</span>
+            </div>
+            <div class="detail">
+              <span class="detail-label">Last Message</span>
+              <span class="detail-value" id="messageValue">Waiting for data</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-title">Activity</div>
+          <pre class="log" id="log">Open this page in Edge or Chrome on localhost, then connect the ESP32.</pre>
+        </section>
       </aside>
 
-      <main id="map"></main>
+      <main class="map-shell">
+        <div id="map"></div>
+        <div class="map-overlay">
+          <div class="map-banner">
+            <strong>Waypoint</strong>
+            <span id="mapTargetText">Click the map to choose a destination.</span>
+          </div>
+          <div class="map-chip">
+            <strong>Boat</strong>
+            <span id="mapBoatText">No live position yet</span>
+          </div>
+        </div>
+      </main>
     </div>
 
     <script
@@ -140,7 +440,9 @@
       crossorigin=""
     ></script>
     <script>
-      const map = L.map("map").setView([55.6761, 12.5683], 12);
+      const map = L.map("map", { zoomControl: false }).setView([56.4589, 9.4032], 16);
+      L.control.zoom({ position: "bottomright" }).addTo(map);
+
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: "&copy; OpenStreetMap contributors"
@@ -150,86 +452,255 @@
       const sendWaypointButton = document.getElementById("sendWaypointButton");
       const stopButton = document.getElementById("stopButton");
       const statusButton = document.getElementById("statusButton");
+      const statusDot = document.getElementById("statusDot");
       const serialStatus = document.getElementById("serialStatus");
-      const targetStatus = document.getElementById("targetStatus");
-      const liveStatus = document.getElementById("liveStatus");
+      const modeValue = document.getElementById("modeValue");
+      const satValue = document.getElementById("satValue");
+      const headingValue = document.getElementById("headingValue");
+      const distanceValue = document.getElementById("distanceValue");
+      const boatPositionValue = document.getElementById("boatPositionValue");
+      const targetValue = document.getElementById("targetValue");
+      const gpsQualityValue = document.getElementById("gpsQualityValue");
+      const calibrationValue = document.getElementById("calibrationValue");
+      const messageValue = document.getElementById("messageValue");
+      const mapTargetText = document.getElementById("mapTargetText");
+      const mapBoatText = document.getElementById("mapBoatText");
       const log = document.getElementById("log");
 
       let port;
       let writer;
       let reader;
-      let waypointMarker;
       let selectedWaypoint = null;
+      let boatMarker = null;
+      let waypointMarker = null;
       let sendLocked = false;
       const eventLog = [];
-      const liveTelemetry = {
+
+      const boatIcon = L.divIcon({
+        className: "",
+        html: '<div class="boat-marker"></div>',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+
+      const targetIcon = L.divIcon({
+        className: "",
+        html: '<div class="target-marker"></div>',
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+      });
+
+      const telemetry = {
+        mode: "Idle",
         satellites: null,
         latitude: null,
         longitude: null,
+        heading: null,
+        hdop: null,
+        calibration: null,
+        distance: null,
         message: "Waiting for data"
       };
 
       function appendLog(message) {
         eventLog.unshift(`${new Date().toLocaleTimeString()}  ${message}`);
-        if (eventLog.length > 12) {
-          eventLog.length = 12;
+        if (eventLog.length > 10) {
+          eventLog.length = 10;
         }
         log.textContent = eventLog.join("\n");
       }
 
-      function renderLiveStatus() {
-        if (liveTelemetry.latitude !== null && liveTelemetry.longitude !== null) {
-          const satText = liveTelemetry.satellites ?? "?";
-          liveStatus.textContent = `Sat ${satText} | Lat ${liveTelemetry.latitude} | Lon ${liveTelemetry.longitude}`;
+      function formatCoordinate(lat, lon) {
+        if (lat === null || lon === null) return "Waiting for GPS";
+        return `${Number(lat).toFixed(6)}, ${Number(lon).toFixed(6)}`;
+      }
+
+      function updateBoatMarker() {
+        if (telemetry.latitude === null || telemetry.longitude === null) return;
+
+        const latLng = [Number(telemetry.latitude), Number(telemetry.longitude)];
+        if (!boatMarker) {
+          boatMarker = L.marker(latLng, { icon: boatIcon }).addTo(map);
         } else {
-          liveStatus.textContent = liveTelemetry.message;
+          boatMarker.setLatLng(latLng);
         }
+
+        const markerElement = boatMarker.getElement()?.querySelector(".boat-marker");
+        if (markerElement) {
+          const rotation = telemetry.heading !== null ? Number(telemetry.heading) : 0;
+          markerElement.style.transform = `rotate(${rotation}deg)`;
+        }
+      }
+
+      function updateWaypointMarker() {
+        if (!selectedWaypoint) return;
+        const latLng = [selectedWaypoint.lat, selectedWaypoint.lng];
+        if (!waypointMarker) {
+          waypointMarker = L.marker(latLng, { icon: targetIcon }).addTo(map);
+        } else {
+          waypointMarker.setLatLng(latLng);
+        }
+      }
+
+      function updateUi() {
+        modeValue.textContent = telemetry.mode;
+        satValue.textContent = telemetry.satellites ?? "-";
+        headingValue.textContent = telemetry.heading !== null ? `${Number(telemetry.heading).toFixed(1)} deg` : "-";
+        distanceValue.textContent = telemetry.distance !== null ? `${telemetry.distance.toFixed(1)} m` : "-";
+        boatPositionValue.textContent = formatCoordinate(telemetry.latitude, telemetry.longitude);
+        gpsQualityValue.textContent = telemetry.hdop !== null ? `HDOP ${Number(telemetry.hdop).toFixed(1)}` : "-";
+        calibrationValue.textContent = telemetry.calibration ?? "-";
+        messageValue.textContent = telemetry.message;
+        mapBoatText.textContent = formatCoordinate(telemetry.latitude, telemetry.longitude);
+        targetValue.textContent = selectedWaypoint
+          ? `${selectedWaypoint.lat.toFixed(6)}, ${selectedWaypoint.lng.toFixed(6)}`
+          : "Not selected";
+        mapTargetText.textContent = selectedWaypoint
+          ? `${selectedWaypoint.lat.toFixed(6)}, ${selectedWaypoint.lng.toFixed(6)}`
+          : "Click the map to choose a destination.";
+
+        sendWaypointButton.disabled = !writer || !selectedWaypoint;
+        updateBoatMarker();
+        updateWaypointMarker();
+      }
+
+      function parseStatusLine(line) {
+        const parts = line.split(",");
+        telemetry.message = line;
+
+        for (const part of parts) {
+          const [rawKey, rawValue] = part.split("=");
+          if (!rawValue) continue;
+          const key = rawKey.trim();
+          const value = rawValue.trim();
+
+          if (key === "MODE") telemetry.mode = value;
+          if (key === "LAT") telemetry.latitude = Number(value);
+          if (key === "LON") telemetry.longitude = Number(value);
+          if (key === "HEADING" && value !== "NA") telemetry.heading = Number(value);
+          if (key === "HDOP" && value !== "NA") telemetry.hdop = Number(value);
+          if (key === "CAL") telemetry.calibration = value;
+        }
+      }
+
+      function parseAutoLine(line) {
+        const parts = line.split(",");
+        for (const part of parts) {
+          const [rawKey, rawValue] = part.split("=");
+          if (!rawValue) continue;
+          if (rawKey.trim() === "DIST") telemetry.distance = Number(rawValue.trim());
+        }
+        telemetry.message = line;
       }
 
       function handleEsp32Line(line) {
         const satMatch = line.match(/^Satellites:\s*(\d+)/i);
         if (satMatch) {
-          liveTelemetry.satellites = satMatch[1];
-          renderLiveStatus();
+          telemetry.satellites = Number(satMatch[1]);
+          telemetry.message = "GPS stream active";
+          updateUi();
+          return;
+        }
+
+        const shortSatMatch = line.match(/^sats\s*$/i);
+        if (shortSatMatch) {
+          return;
+        }
+
+        const rawSatValueMatch = line.match(/^(\d+)$/);
+        if (rawSatValueMatch) {
+          telemetry.satellites = Number(rawSatValueMatch[1]);
+          telemetry.message = "GPS stream active";
+          updateUi();
           return;
         }
 
         const latMatch = line.match(/^Latitude:\s*([-\d.]+)/i);
         if (latMatch) {
-          liveTelemetry.latitude = latMatch[1];
-          renderLiveStatus();
+          telemetry.latitude = Number(latMatch[1]);
+          updateUi();
           return;
         }
 
         const lonMatch = line.match(/^Longitude:\s*([-\d.]+)/i);
         if (lonMatch) {
-          liveTelemetry.longitude = lonMatch[1];
-          renderLiveStatus();
+          telemetry.longitude = Number(lonMatch[1]);
+          updateUi();
+          return;
+        }
+
+        const orientationMatch = line.match(/^Orientation:\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/i);
+        if (orientationMatch) {
+          telemetry.heading = Number(orientationMatch[1]);
+          telemetry.message = "Orientation stream active";
+          updateUi();
+          return;
+        }
+
+        const calibrationMatch = line.match(/^CALIB:\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/i);
+        if (calibrationMatch) {
+          telemetry.calibration = `${calibrationMatch[1]}/${calibrationMatch[2]}/${calibrationMatch[3]}/${calibrationMatch[4]}`;
+          updateUi();
           return;
         }
 
         if (/Waiting for a good GPS fix/i.test(line)) {
-          liveTelemetry.message = "Waiting for a good GPS fix";
-          liveTelemetry.latitude = null;
-          liveTelemetry.longitude = null;
-          renderLiveStatus();
+          telemetry.message = "Waiting for a good GPS fix";
+          telemetry.latitude = null;
+          telemetry.longitude = null;
+          telemetry.distance = null;
+          updateUi();
           return;
         }
 
         if (line.startsWith("STATUS,")) {
-          liveTelemetry.message = line;
-          renderLiveStatus();
+          parseStatusLine(line);
+          updateUi();
           return;
         }
 
+        if (line.startsWith("AUTO,")) {
+          parseAutoLine(line);
+          updateUi();
+          return;
+        }
+
+        if (line.startsWith("ARRIVED")) {
+          telemetry.mode = "Idle";
+          telemetry.distance = 0;
+          telemetry.message = "Target reached";
+          appendLog("Boat reported arrival.");
+          updateUi();
+          return;
+        }
+
+        if (line.startsWith("TARGET_SET")) {
+          telemetry.message = "Waypoint accepted by ESP32";
+          appendLog("Waypoint accepted by ESP32.");
+          updateUi();
+          return;
+        }
+
+        if (line.startsWith("ACK,STOP")) {
+          telemetry.mode = "Idle";
+          telemetry.message = "Stop acknowledged";
+          appendLog("Boat stop acknowledged.");
+          updateUi();
+          return;
+        }
+
+        telemetry.message = line;
         appendLog(`ESP32: ${line}`);
+        updateUi();
       }
 
       function setConnected(isConnected) {
         serialStatus.textContent = isConnected ? "Connected" : "Disconnected";
-        sendWaypointButton.disabled = !isConnected || !selectedWaypoint;
-        stopButton.disabled = !isConnected;
+        statusDot.classList.toggle("connected", isConnected);
+        connectButton.textContent = isConnected ? "Connected" : "Connect";
         statusButton.disabled = !isConnected;
+        stopButton.disabled = !isConnected;
+        sendWaypointButton.disabled = !isConnected || !selectedWaypoint;
       }
 
       async function startReading() {
@@ -253,6 +724,8 @@
             }
           } catch (error) {
             appendLog(`Read error: ${error.message}`);
+            telemetry.message = "Serial read error";
+            updateUi();
           } finally {
             reader.releaseLock();
           }
@@ -266,12 +739,15 @@
         appendLog(`Sent: ${command}`);
         setTimeout(() => {
           sendLocked = false;
-        }, 300);
+        }, 350);
       }
 
       connectButton.addEventListener("click", async () => {
+        if (writer) return;
         if (!("serial" in navigator)) {
           appendLog("Web Serial is not available in this browser.");
+          telemetry.message = "Browser does not support Web Serial";
+          updateUi();
           return;
         }
 
@@ -280,24 +756,21 @@
           await port.open({ baudRate: 115200 });
           writer = port.writable.getWriter();
           setConnected(true);
+          telemetry.message = "Connected to ESP32";
           appendLog("Connected to ESP32.");
+          updateUi();
           startReading();
         } catch (error) {
           appendLog(`Connection failed: ${error.message}`);
+          telemetry.message = "Connection failed";
+          updateUi();
         }
       });
 
       map.on("click", (event) => {
         selectedWaypoint = event.latlng;
-        targetStatus.textContent = `${selectedWaypoint.lat.toFixed(6)}, ${selectedWaypoint.lng.toFixed(6)}`;
-
-        if (waypointMarker) {
-          waypointMarker.setLatLng(selectedWaypoint);
-        } else {
-          waypointMarker = L.marker(selectedWaypoint).addTo(map);
-        }
-
-        sendWaypointButton.disabled = !writer;
+        updateWaypointMarker();
+        updateUi();
       });
 
       sendWaypointButton.addEventListener("click", async () => {
@@ -313,6 +786,8 @@
       statusButton.addEventListener("click", async () => {
         await sendCommand("STATUS");
       });
+
+      updateUi();
     </script>
   </body>
 </html>
