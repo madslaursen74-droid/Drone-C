@@ -6,13 +6,31 @@
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
 
-#define GPS_RX 16 
+#define GPS_RX 16
+
 
 void updateGPS()
 {
   while (gpsSerial.available())
   {
     gps.encode(gpsSerial.read());
+  }
+}
+
+
+void setup() {
+  // put your setup code here, to run once:
+ Serial.begin(115200);
+ delay(3000);
+ Serial.println("starting GPS... ");
+ gpsSerial.begin(9600, SERIAL_8N1, GPS_RX);
+
+  while (!hasGoodGPSFix())
+  {
+    updateGPS();
+
+    Serial.print("Satellites: ");
+    Serial.println(gps.satellites.value());
   }
 }
 
@@ -43,21 +61,6 @@ void GetGPSData()
   }
 }
 
-void setup() {
-  // put your setup code here, to run once:
- Serial.begin(115200);
- delay(3000);
- Serial.println("starting GPS... ");
- gpsSerial.begin(9600, SERIAL_8N1, GPS_RX);
-
-  while (!hasGoodGPSFix())
-  {
-    updateGPS();
-
-    Serial.print("Satellites: ");
-    Serial.println(gps.satellites.value());
-  }
-}
     
 void loop() {
   
