@@ -7,12 +7,11 @@
 
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
-Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29, &Wire);
 Servo leftEsc;
 Servo rightEsc;
 
 constexpr int GPS_RX = 17;
-constexpr int GPS_TX = -1;
 constexpr int LEFT_ESC_PIN = 25;
 constexpr int RIGHT_ESC_PIN = 26;
 
@@ -23,7 +22,13 @@ constexpr int kBaseForwardUs = 1640;
 constexpr int kNearTargetForwardUs = 1575;
 constexpr int kMinForwardUs = 1535;
 constexpr int kMaxForwardUs = 1750;
-constexpr float kHeadingKp = 1.8f;
+constexpr float kHeadingKp = 2.1f;
+constexpr float kHeadingDeadbandDegrees = 4.0f;
+constexpr float kStrongTurnThresholdDegrees = 35.0f;
+constexpr float kSlowTurnThresholdDegrees = 70.0f;
+constexpr float kHeadingBlendAlpha = 0.25f;
+constexpr float kMaxHdop = 3.5f;
+constexpr int kMinSatellites = 6;
 
 enum class BoatMode {
   Idle,
@@ -41,6 +46,27 @@ Waypoint targetWaypoint;
 BoatMode currentMode = BoatMode::Idle;
 bool bnoReady = false;
 unsigned long lastStatusMs = 0;
+float filteredHeadingDegrees = 0.0f;
+bool hasFilteredHeading = false;
+
+float normalizeHeadingError(float errorDegrees);
+
+float blendHeadingDegrees(float previous, float current, float alpha) {
+  const float delta = normalizeHeadingError(current - previous);
+  float blended = previous + alpha * delta;
+
+  while (blended < 0.0f) blended += 360.0f;
+  while (blended >= 360.0f) blended -= 360.0f;
+  return blended;
+}
+
+bool hasUsableCalibration() {
+  if (!bnoReady) return false;
+
+  uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
+  bno.getCalibration(&sys, &gyro, &accel, &mag);
+  return sys >= 1 && mag >= 2;
+}
 
 void updateGPS() {
   while (gpsSerial.available()) {
@@ -50,8 +76,9 @@ void updateGPS() {
 
 bool hasGoodGPSFix() {
   if (!gps.location.isValid()) return false;
-  if (gps.satellites.value() < 5) return false;
+  if (gps.satellites.value() < kMinSatellites) return false;
   if (gps.location.age() > 2000) return false;
+  if (gps.hdop.isValid() && gps.hdop.hdop() > kMaxHdop) return false;
   return true;
 }
 
@@ -97,15 +124,26 @@ float normalizeHeadingError(float errorDegrees) {
 
 bool readHeadingDegrees(float& headingDegrees) {
   if (!bnoReady) return false;
+  if (!hasUsableCalibration()) return false;
 
   sensors_event_t event;
   bno.getEvent(&event);
   if (!isfinite(event.orientation.x)) return false;
 
-  headingDegrees = event.orientation.x;
-  if (headingDegrees < 0.0f) {
-    headingDegrees += 360.0f;
+  float rawHeadingDegrees = event.orientation.x;
+  if (rawHeadingDegrees < 0.0f) {
+    rawHeadingDegrees += 360.0f;
   }
+
+  if (!hasFilteredHeading) {
+    filteredHeadingDegrees = rawHeadingDegrees;
+    hasFilteredHeading = true;
+  } else {
+    filteredHeadingDegrees = blendHeadingDegrees(
+        filteredHeadingDegrees, rawHeadingDegrees, kHeadingBlendAlpha);
+  }
+
+  headingDegrees = filteredHeadingDegrees;
   return true;
 }
 
@@ -138,6 +176,12 @@ void printStatus() {
     Serial.print(gps.location.lat(), 7);
     Serial.print(",LON=");
     Serial.print(gps.location.lng(), 7);
+    Serial.print(",HDOP=");
+    if (gps.hdop.isValid()) {
+      Serial.print(gps.hdop.hdop(), 1);
+    } else {
+      Serial.print("NA");
+    }
   } else {
     Serial.print(",GPS=NO_FIX");
   }
@@ -148,6 +192,19 @@ void printStatus() {
     Serial.print(heading, 1);
   } else {
     Serial.print(",HEADING=NA");
+  }
+
+  uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
+  if (bnoReady) {
+    bno.getCalibration(&sys, &gyro, &accel, &mag);
+    Serial.print(",CAL=");
+    Serial.print(sys);
+    Serial.print("/");
+    Serial.print(gyro);
+    Serial.print("/");
+    Serial.print(accel);
+    Serial.print("/");
+    Serial.print(mag);
   }
 
   if (targetWaypoint.valid) {
@@ -233,7 +290,7 @@ void runAutonomousController() {
 
   float headingDegrees = 0.0f;
   if (!readHeadingDegrees(headingDegrees)) {
-    Serial.println("WARN,NO_HEADING");
+    Serial.println("WARN,NO_HEADING_OR_CAL");
     stopBoat();
     return;
   }
@@ -251,12 +308,25 @@ void runAutonomousController() {
 
   const float targetBearing = static_cast<float>(calculateBearingDegrees(
       currentLat, currentLon, targetWaypoint.latitude, targetWaypoint.longitude));
-  const float headingError = normalizeHeadingError(targetBearing - headingDegrees);
-  const float correction = kHeadingKp * headingError;
+  float headingError = normalizeHeadingError(targetBearing - headingDegrees);
+
+  if (fabs(headingError) < kHeadingDeadbandDegrees) {
+    headingError = 0.0f;
+  }
+
+  float correction = kHeadingKp * headingError;
 
   int baseThrottleUs = kBaseForwardUs;
   if (distanceMeters < 8.0) {
     baseThrottleUs = kNearTargetForwardUs;
+  }
+
+  if (fabs(headingError) > kStrongTurnThresholdDegrees) {
+    baseThrottleUs = kNearTargetForwardUs;
+  }
+
+  if (fabs(headingError) > kSlowTurnThresholdDegrees) {
+    baseThrottleUs = kMinForwardUs;
   }
 
   int leftSpeed = static_cast<int>(round(baseThrottleUs + correction));
@@ -264,6 +334,8 @@ void runAutonomousController() {
 
   leftSpeed = max(leftSpeed, kMinForwardUs);
   rightSpeed = max(rightSpeed, kMinForwardUs);
+  leftSpeed = min(leftSpeed, kMaxForwardUs);
+  rightSpeed = min(rightSpeed, kMaxForwardUs);
 
   Serial.print("AUTO,DIST=");
   Serial.print(distanceMeters, 2);
@@ -272,7 +344,9 @@ void runAutonomousController() {
   Serial.print(",HEADING=");
   Serial.print(headingDegrees, 1);
   Serial.print(",ERROR=");
-  Serial.println(headingError, 1);
+  Serial.print(headingError, 1);
+  Serial.print(",BASE=");
+  Serial.println(baseThrottleUs);
 
   setMotorSpeeds(leftSpeed, rightSpeed);
 }
@@ -293,9 +367,10 @@ void setup() {
   delay(kEscArmDelayMs);
   Serial.println("ESC,READY");
 
-  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX);
 
-  Wire.begin();
+  Wire.begin(21, 22);
+  Wire.setClock(100000);
   bnoReady = bno.begin();
   if (bnoReady) {
     bno.setExtCrystalUse(true);
