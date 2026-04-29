@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Drone-C Nav Control</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    >
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, Arial, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #111827;
+        color: #e5e7eb;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        min-height: 100vh;
+      }
+
+      .panel {
+        padding: 20px;
+        border-right: 1px solid #1f2937;
+        background: #0f172a;
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: 24px;
+      }
+
+      .controls {
+        display: grid;
+        gap: 12px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 12px 14px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        background: #2563eb;
+        color: white;
+      }
+
+      button.secondary {
+        background: #334155;
+      }
+
+      .meta {
+        margin-top: 16px;
+        padding: 14px;
+        border-radius: 8px;
+        background: #111827;
+        border: 1px solid #1f2937;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .meta strong {
+        display: inline-block;
+        min-width: 90px;
+      }
+
+      #map {
+        width: 100%;
+        min-height: 100vh;
+      }
+
+      pre {
+        margin: 16px 0 0;
+        padding: 12px;
+        border-radius: 8px;
+        background: #020617;
+        border: 1px solid #1f2937;
+        color: #93c5fd;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .panel {
+          border-right: 0;
+          border-bottom: 1px solid #1f2937;
+        }
+
+        #map {
+          min-height: 60vh;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="panel">
+        <h1>Boat Nav</h1>
+        <div class="controls">
+          <button id="connectButton">Connect ESP32</button>
+          <button id="sendWaypointButton" class="secondary" disabled>Send waypoint</button>
+          <button id="stopButton" class="secondary" disabled>Stop boat</button>
+          <button id="statusButton" class="secondary" disabled>Request status</button>
+        </div>
+
+        <div class="meta">
+          <div><strong>Serial:</strong> <span id="serialStatus">Disconnected</span></div>
+          <div><strong>Target:</strong> <span id="targetStatus">Not selected</span></div>
+          <div><strong>ESP32:</strong> <span id="liveStatus">Waiting for data</span></div>
+          <div><strong>Hint:</strong> Click the map to place a waypoint.</div>
+        </div>
+
+        <pre id="log">Open this page in Edge or Chrome on localhost, then connect the ESP32.</pre>
+      </aside>
+
+      <main id="map"></main>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script>
+      const map = L.map("map").setView([55.6761, 12.5683], 12);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+      }).addTo(map);
+
+      const connectButton = document.getElementById("connectButton");
+      const sendWaypointButton = document.getElementById("sendWaypointButton");
+      const stopButton = document.getElementById("stopButton");
+      const statusButton = document.getElementById("statusButton");
+      const serialStatus = document.getElementById("serialStatus");
+      const targetStatus = document.getElementById("targetStatus");
+      const liveStatus = document.getElementById("liveStatus");
+      const log = document.getElementById("log");
+
+      let port;
+      let writer;
+      let reader;
+      let waypointMarker;
+      let selectedWaypoint = null;
+      let sendLocked = false;
+      const eventLog = [];
+      const liveTelemetry = {
+        satellites: null,
+        latitude: null,
+        longitude: null,
+        message: "Waiting for data"
+      };
+
+      function appendLog(message) {
+        eventLog.unshift(`${new Date().toLocaleTimeString()}  ${message}`);
+        if (eventLog.length > 12) {
+          eventLog.length = 12;
+        }
+        log.textContent = eventLog.join("\n");
+      }
+
+      function renderLiveStatus() {
+        if (liveTelemetry.latitude !== null && liveTelemetry.longitude !== null) {
+          const satText = liveTelemetry.satellites ?? "?";
+          liveStatus.textContent = `Sat ${satText} | Lat ${liveTelemetry.latitude} | Lon ${liveTelemetry.longitude}`;
+        } else {
+          liveStatus.textContent = liveTelemetry.message;
+        }
+      }
+
+      function handleEsp32Line(line) {
+        const satMatch = line.match(/^Satellites:\s*(\d+)/i);
+        if (satMatch) {
+          liveTelemetry.satellites = satMatch[1];
+          renderLiveStatus();
+          return;
+        }
+
+        const latMatch = line.match(/^Latitude:\s*([-\d.]+)/i);
+        if (latMatch) {
+          liveTelemetry.latitude = latMatch[1];
+          renderLiveStatus();
+          return;
+        }
+
+        const lonMatch = line.match(/^Longitude:\s*([-\d.]+)/i);
+        if (lonMatch) {
+          liveTelemetry.longitude = lonMatch[1];
+          renderLiveStatus();
+          return;
+        }
+
+        if (/Waiting for a good GPS fix/i.test(line)) {
+          liveTelemetry.message = "Waiting for a good GPS fix";
+          liveTelemetry.latitude = null;
+          liveTelemetry.longitude = null;
+          renderLiveStatus();
+          return;
+        }
+
+        if (line.startsWith("STATUS,")) {
+          liveTelemetry.message = line;
+          renderLiveStatus();
+          return;
+        }
+
+        appendLog(`ESP32: ${line}`);
+      }
+
+      function setConnected(isConnected) {
+        serialStatus.textContent = isConnected ? "Connected" : "Disconnected";
+        sendWaypointButton.disabled = !isConnected || !selectedWaypoint;
+        stopButton.disabled = !isConnected;
+        statusButton.disabled = !isConnected;
+      }
+
+      async function startReading() {
+        while (port?.readable) {
+          reader = port.readable.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+
+              let lineBreakIndex;
+              while ((lineBreakIndex = buffer.indexOf("\n")) !== -1) {
+                const line = buffer.slice(0, lineBreakIndex).trim();
+                buffer = buffer.slice(lineBreakIndex + 1);
+                if (line) handleEsp32Line(line);
+              }
+            }
+          } catch (error) {
+            appendLog(`Read error: ${error.message}`);
+          } finally {
+            reader.releaseLock();
+          }
+        }
+      }
+
+      async function sendCommand(command) {
+        if (!writer || sendLocked) return;
+        sendLocked = true;
+        await writer.write(new TextEncoder().encode(`${command}\n`));
+        appendLog(`Sent: ${command}`);
+        setTimeout(() => {
+          sendLocked = false;
+        }, 300);
+      }
+
+      connectButton.addEventListener("click", async () => {
+        if (!("serial" in navigator)) {
+          appendLog("Web Serial is not available in this browser.");
+          return;
+        }
+
+        try {
+          port = await navigator.serial.requestPort();
+          await port.open({ baudRate: 115200 });
+          writer = port.writable.getWriter();
+          setConnected(true);
+          appendLog("Connected to ESP32.");
+          startReading();
+        } catch (error) {
+          appendLog(`Connection failed: ${error.message}`);
+        }
+      });
+
+      map.on("click", (event) => {
+        selectedWaypoint = event.latlng;
+        targetStatus.textContent = `${selectedWaypoint.lat.toFixed(6)}, ${selectedWaypoint.lng.toFixed(6)}`;
+
+        if (waypointMarker) {
+          waypointMarker.setLatLng(selectedWaypoint);
+        } else {
+          waypointMarker = L.marker(selectedWaypoint).addTo(map);
+        }
+
+        sendWaypointButton.disabled = !writer;
+      });
+
+      sendWaypointButton.addEventListener("click", async () => {
+        if (!selectedWaypoint) return;
+        const command = `GOTO,${selectedWaypoint.lat.toFixed(7)},${selectedWaypoint.lng.toFixed(7)}`;
+        await sendCommand(command);
+      });
+
+      stopButton.addEventListener("click", async () => {
+        await sendCommand("STOP");
+      });
+
+      statusButton.addEventListener("click", async () => {
+        await sendCommand("STATUS");
+      });
+    </script>
+  </body>
+</html>
