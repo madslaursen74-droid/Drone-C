@@ -65,11 +65,13 @@ void readBNOsensor()
 {
   sensors_event_t event; 
   bno.getEvent(&event);
-  Serial.print("Orientation: ");
+  Serial.print("Heading: ");
   Serial.print(event.orientation.x, 4);
-  Serial.print(" ");
+
+  Serial.print(" Pitch: ");
   Serial.print(event.orientation.y, 4);
-  Serial.print(" ");
+
+  Serial.print(" Roll: ");
   Serial.println(event.orientation.z, 4);
 
 
@@ -84,6 +86,64 @@ void readBNOsensor()
 
 }
 
+double bearingToPoint(double lat1, double lon1, double lat2, double lon2)
+{
+  lat1 = radians(lat1);
+  lon1 = radians(lon1);
+  lat2 = radians(lat2);
+  lon2 = radians(lon2);
+
+  double dLon = lon2 - lon1;
+
+  double y = sin(dLon) * cos(lat2);
+  double x = cos(lat1) * sin(lat2) -
+             sin(lat1) * cos(lat2) * cos(dLon);
+
+  double bearing = degrees(atan2(y, x));
+
+  if (bearing < 0) bearing += 360;
+
+  return bearing;
+}
+
+double angleDifference(double targetBearing, double currentHeading)
+{
+  double diff = targetBearing - currentHeading;
+
+  while (diff > 180) diff -= 360;
+  while (diff < -180) diff += 360;
+
+  return diff;
+}
+
+void turnToPoint(double targetLat, double targetLon)
+{
+  if (!gps.location.isValid()) {
+    Serial.println("GPS location not valid");
+    return;
+  }
+
+  double currentLat = gps.location.lat();
+  double currentLon = gps.location.lng();
+
+  double targetBearing = bearingToPoint(currentLat, currentLon, targetLat, targetLon);
+  
+  sensors_event_t event; 
+  bno.getEvent(&event);
+  double currentHeading = event.orientation.x;
+
+  double turnAngle = angleDifference(targetBearing, currentHeading);
+
+  
+  if (turnAngle > 10) {
+    Serial.print("Turn right");
+  } else if (turnAngle < -10) {
+    Serial.print("Turn left");
+  } else {
+    Serial.println("Already facing the target point");
+  }
+}
+
     
 void loop() {
   readBNOsensor();
@@ -93,4 +153,6 @@ void loop() {
   updateGPS();
   GetGPSData();
   delay(1000);
+
+  turnToPoint(55.6761, 12.5683);
 }
