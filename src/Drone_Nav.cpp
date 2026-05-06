@@ -12,7 +12,7 @@ TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
-#define GPS_RX 34
+#define GPS_RX 16
 
 double HardcodedTargets[][2] = {{55.6761, 12.5683},
                                 {57.5353, 13.2683},
@@ -72,20 +72,11 @@ void readBNOsensor()
   Serial.print("Heading: ");
   Serial.print(event.orientation.x, 4);
 
-  Serial.print(" Pitch: ");
-  Serial.print(event.orientation.y, 4);
-
-  Serial.print(" Roll: ");
-  Serial.println(event.orientation.z, 4);
-
 
   uint8_t sys, gyro, accel, mag;
   bno.getCalibration(&sys, &gyro, &accel, &mag);
 
   Serial.print("CALIB: ");
-  Serial.print(sys); Serial.print(" ");
-  Serial.print(gyro); Serial.print(" ");
-  Serial.print(accel); Serial.print(" ");
   Serial.println(mag);
 
 }
@@ -177,7 +168,6 @@ void loop() {
   delay(1000);
   updateGPS();
   GetGPSData();
-  delay(1000);
 
   for (int i = 0; i < 3; i++) {
     if (distanceToPoint(gps.location.lat(), gps.location.lng(), HardcodedTargets[i][0], HardcodedTargets[i][1]) > 5) {
