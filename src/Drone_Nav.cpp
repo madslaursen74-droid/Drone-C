@@ -15,14 +15,15 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
 #define GPS_RX 16
 
-constexpr int LEFT_ESC_PIN = 18;
-constexpr int RIGHT_ESC_PIN = 4;
+constexpr int LEFT_ESC_PIN = 4;
+constexpr int RIGHT_ESC_PIN = 18;
 
 constexpr int ESC_MIN_US = 1000;
 constexpr int ESC_MAX_US = 2000;
 constexpr int ESC_STOP_US = 1500;
 constexpr int ESC_FORWARD_US = 1640;
 constexpr int ESC_SLOW_US = 1575;
+constexpr int ESC_MAX_TURN_CHANGE_US = 120;
 
 constexpr float ARRIVAL_RADIUS_METERS = 3.0f;
 constexpr float HEADING_KP = 2.0f;
@@ -33,7 +34,7 @@ int currentWaypointIndex = 0;
 Servo leftEsc;
 Servo rightEsc;
 
-double HardcodedTargets[][2] = {{55.6761, 12.5683},
+double HardcodedTargets[][2] = {{56.458900, 9.403250},
                                 {57.5353, 13.2683},
                                 {60.3262, 13.3483}};
 
@@ -118,11 +119,19 @@ void readBNOsensor()
   Serial.print("Heading: ");
   Serial.print(event.orientation.x, 4);
 
+  Serial.print(" Pitch: ");
+  Serial.print(event.orientation.y, 4);
+
+  
+
 
   uint8_t sys, gyro, accel, mag;
   bno.getCalibration(&sys, &gyro, &accel, &mag);
 
   Serial.print("CALIB: ");
+  Serial.print(sys); Serial.print(" ");
+  Serial.print(gyro); Serial.print(" ");
+  Serial.print(accel); Serial.print(" ");
   Serial.println(mag);
 
 }
@@ -215,18 +224,38 @@ float headingErrorDegrees(float target, float current) {
 
 
 
-void goToCurrentWaypoint(double distance, float error) {
+void forward(int speedUs) {
+  speedUs = constrain(speedUs, ESC_STOP_US, ESC_MAX_US);
+  setMotors(speedUs, speedUs);
+}
 
- int baseSpeed = ESC_FORWARD_US;
-  if (distance < 8.0 || fabs(error) > 35.0f) {
-    baseSpeed = ESC_SLOW_US;
+void turn(float error) {
+  int turnChange = static_cast<int>(round(fabs(error) * HEADING_KP));
+  turnChange = constrain(turnChange, 0, ESC_MAX_TURN_CHANGE_US);
+
+  int slowMotorSpeed = ESC_SLOW_US;
+  int fastMotorSpeed = constrain(ESC_SLOW_US + turnChange, ESC_STOP_US, ESC_MAX_US);
+
+  if (error > 0) {
+    setMotors(fastMotorSpeed, slowMotorSpeed);
+  }
+  else {
+    setMotors(slowMotorSpeed, fastMotorSpeed);
+  }
+}
+
+void goToCurrentWaypoint(double distance, float error) {
+  int speed = ESC_FORWARD_US;
+  if (distance < 8.0) {
+    speed = ESC_SLOW_US;
   }
 
-  const int correction = static_cast<int>(round(HEADING_KP * error));
-  const int leftSpeed = constrain(baseSpeed + correction, ESC_STOP_US, ESC_MAX_US);
-  const int rightSpeed = constrain(baseSpeed - correction, ESC_STOP_US, ESC_MAX_US);
-
-  setMotors(leftSpeed, rightSpeed);
+  if (fabs(error) <= HEADING_DEADBAND) {
+    forward(speed);
+  }
+  else {
+    turn(error);
+  }
 }
 
     
@@ -281,7 +310,9 @@ void loop() {
     }
 
     double error = turnToPoint(targetLat, targetLon);
+    Serial.print("Distance: ");
     Serial.println(distance);
+    Serial.print("Angle: ");
     Serial.println(error);
     goToCurrentWaypoint(distance, error);
     delay(200);
