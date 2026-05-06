@@ -37,6 +37,12 @@ double HardcodedTargets[][2] = {{55.6761, 12.5683},
                                 {57.5353, 13.2683},
                                 {60.3262, 13.3483}};
 
+constexpr int WAYPOINT_COUNT = sizeof(HardcodedTargets) / sizeof(HardcodedTargets[0]);
+constexpr unsigned long WAYPOINT_STOP_TIME_MS = 5000;
+
+bool waitingAtWaypoint = false;
+unsigned long waypointStopStartTime = 0;
+
 
 void updateGPS()
 {
@@ -242,25 +248,52 @@ void loop() {
   GetGPSData();
   delay(1000);
   updateGPS();
-if (gps.location.isValid()) {
 
-  
-  for (int i = 0; i < 3; i++) {
-    updateGPS();
-    if (distanceToPoint(gps.location.lat(), gps.location.lng(), HardcodedTargets[i][0], HardcodedTargets[i][1]) > 5) {
-      double error = turnToPoint(HardcodedTargets[i][0], HardcodedTargets[i][1]);
-      double distance = distanceToPoint(gps.location.lat(), gps.location.lng(), HardcodedTargets[i][0], HardcodedTargets[i][1]);
-      updateGPS();
-      Serial.println(distance);
-      Serial.println(error);
-      goToCurrentWaypoint(distance, error);
-      delay(5000);
+  if (gps.location.isValid()) {
+    if (currentWaypointIndex >= WAYPOINT_COUNT) {
+      Serial.println("All target points reached");
+      stopBoat();
+      return;
     }
 
-    else {
+    if (waitingAtWaypoint) {
+      stopBoat();
+
+      if (millis() - waypointStopStartTime >= WAYPOINT_STOP_TIME_MS) {
+        Serial.print("Leaving target point ");
+        Serial.println(currentWaypointIndex);
+        currentWaypointIndex++;
+        waitingAtWaypoint = false;
+      }
+
+      delay(200);
+      return;
+    }
+
+    double targetLat = HardcodedTargets[currentWaypointIndex][0];
+    double targetLon = HardcodedTargets[currentWaypointIndex][1];
+    double distance = distanceToPoint(
+      gps.location.lat(),
+      gps.location.lng(),
+      targetLat,
+      targetLon
+    );
+
+    if (distance <= ARRIVAL_RADIUS_METERS) {
       Serial.print("Reached target point ");
+      Serial.println(currentWaypointIndex);
+      stopBoat();
+      waitingAtWaypoint = true;
+      waypointStopStartTime = millis();
+      delay(200);
+      return;
     }
-  }
+
+    double error = turnToPoint(targetLat, targetLon);
+    Serial.println(distance);
+    Serial.println(error);
+    goToCurrentWaypoint(distance, error);
+    delay(200);
   }
   else {
     Serial.println("Waiting for valid GPS location...");
