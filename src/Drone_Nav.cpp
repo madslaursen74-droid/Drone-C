@@ -118,20 +118,11 @@ void readBNOsensor()
   Serial.print("Heading: ");
   Serial.print(event.orientation.x, 4);
 
-  Serial.print(" Pitch: ");
-  Serial.print(event.orientation.y, 4);
-
-  Serial.print(" Roll: ");
-  Serial.println(event.orientation.z, 4);
-
 
   uint8_t sys, gyro, accel, mag;
   bno.getCalibration(&sys, &gyro, &accel, &mag);
 
   Serial.print("CALIB: ");
-  Serial.print(sys); Serial.print(" ");
-  Serial.print(gyro); Serial.print(" ");
-  Serial.print(accel); Serial.print(" ");
   Serial.println(mag);
 
 }
