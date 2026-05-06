@@ -27,14 +27,14 @@ constexpr int ESC_MAX_TURN_CHANGE_US = 120;
 
 constexpr float ARRIVAL_RADIUS_METERS = 3.0f;
 constexpr float HEADING_KP = 2.0f;
-constexpr float HEADING_DEADBAND = 4.0f;
+constexpr float HEADING_DEADBAND = 10.0f;
 
 int currentWaypointIndex = 0;
 
 Servo leftEsc;
 Servo rightEsc;
 
-double HardcodedTargets[][2] = {{56.458900, 9.403250},
+double HardcodedTargets[][2] = {{56.458900, 9.403400},
                                 {57.5353, 13.2683},
                                 {60.3262, 13.3483}};
 
@@ -101,11 +101,15 @@ void setup() {
  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX);
 
  if(!bno.begin())
+
   {
+
     /* There was a problem detecting the BNO055 ... check your connections */
     Serial.print("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
     while(1);
   }
+  bno.setAxisRemap(Adafruit_BNO055::REMAP_CONFIG_P1);
+  bno.setAxisSign(Adafruit_BNO055::REMAP_SIGN_P1);
 delay(1000);
     
 bno.setExtCrystalUse(true);
@@ -226,6 +230,7 @@ float headingErrorDegrees(float target, float current) {
 
 void forward(int speedUs) {
   speedUs = constrain(speedUs, ESC_STOP_US, ESC_MAX_US);
+  Serial.println("Direction: FORWARD");
   setMotors(speedUs, speedUs);
 }
 
@@ -237,9 +242,11 @@ void turn(float error) {
   int fastMotorSpeed = constrain(ESC_SLOW_US + turnChange, ESC_STOP_US, ESC_MAX_US);
 
   if (error > 0) {
+    Serial.println("Direction: RIGHT");
     setMotors(fastMotorSpeed, slowMotorSpeed);
   }
   else {
+    Serial.println("Direction: LEFT");
     setMotors(slowMotorSpeed, fastMotorSpeed);
   }
 }
