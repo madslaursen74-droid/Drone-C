@@ -3,7 +3,13 @@
 #include <Wire.h>
 #include <Adafruit_BNO055.h>
 #include <ESP32Servo.h>
+#include <WiFi.h>
+#include <esp_now.h>
 #include <utility/imumaths.h>
+
+#ifndef ESP_ARDUINO_VERSION_MAJOR
+#define ESP_ARDUINO_VERSION_MAJOR 2
+#endif
 
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
@@ -12,12 +18,15 @@ Servo leftEsc;
 Servo rightEsc;
 
 constexpr int GPS_RX = 17;
-constexpr int LEFT_ESC_PIN = 25;
-constexpr int RIGHT_ESC_PIN = 26;
+constexpr int LEFT_ESC_PIN = 18;
+constexpr int RIGHT_ESC_PIN = 4;
 
 constexpr float kArrivalRadiusMeters = 3.0f;
+constexpr int kEscMinUs = 1000;
+constexpr int kEscMaxUs = 2000;
 constexpr int kEscNeutralUs = 1500;
 constexpr int kEscArmDelayMs = 3000;
+constexpr int kEscSignalHz = 50;
 constexpr int kBaseForwardUs = 1640;
 constexpr int kNearTargetForwardUs = 1575;
 constexpr int kMinForwardUs = 1535;
@@ -29,10 +38,18 @@ constexpr float kSlowTurnThresholdDegrees = 70.0f;
 constexpr float kHeadingBlendAlpha = 0.25f;
 constexpr float kMaxHdop = 3.5f;
 constexpr int kMinSatellites = 6;
+constexpr int kThrusterMinAngle = 0;
+constexpr int kThrusterNeutralAngle = 90;
+constexpr int kThrusterMaxAngle = 180;
+constexpr double kWaypointE7Scale = 10000000.0;
+
+// Keep this false unless the ESP-NOW sender is trusted and the boat is safely restrained.
+constexpr bool kAllowEspNowManualThrusterOverride = false;
 
 enum class BoatMode {
   Idle,
-  Auto
+  Auto,
+  Manual
 };
 
 struct Waypoint {
@@ -41,15 +58,43 @@ struct Waypoint {
   bool valid = false;
 };
 
+struct __attribute__((packed)) RecoveredControlPacket {
+  uint32_t time;
+  uint32_t leftThruster;
+  uint32_t rightThruster;
+  uint32_t navigationMode;
+  uint32_t waypointFunction;
+  uint32_t waypointId;
+  int32_t waypointLatitude;
+  int32_t waypointLongitude;
+};
+
 String serialBuffer;
 Waypoint targetWaypoint;
 BoatMode currentMode = BoatMode::Idle;
 bool bnoReady = false;
+bool espNowReady = false;
 unsigned long lastStatusMs = 0;
 float filteredHeadingDegrees = 0.0f;
 bool hasFilteredHeading = false;
+RecoveredControlPacket pendingEspNowPacket;
+int pendingEspNowPacketLength = 0;
+bool hasPendingEspNowPacket = false;
+portMUX_TYPE espNowPacketMux = portMUX_INITIALIZER_UNLOCKED;
 
 float normalizeHeadingError(float errorDegrees);
+
+const char* modeName(BoatMode mode) {
+  switch (mode) {
+    case BoatMode::Auto:
+      return "AUTO";
+    case BoatMode::Manual:
+      return "MANUAL";
+    case BoatMode::Idle:
+    default:
+      return "IDLE";
+  }
+}
 
 float blendHeadingDegrees(float previous, float current, float alpha) {
   const float delta = normalizeHeadingError(current - previous);
@@ -147,9 +192,15 @@ bool readHeadingDegrees(float& headingDegrees) {
   return true;
 }
 
-void setMotorSpeeds(int leftSpeed, int rightSpeed) {
-  leftSpeed = constrain(leftSpeed, kEscNeutralUs, kMaxForwardUs);
-  rightSpeed = constrain(rightSpeed, kEscNeutralUs, kMaxForwardUs);
+int thrusterAngleToMicroseconds(uint32_t angle) {
+  const int constrainedAngle = constrain(
+      static_cast<int>(angle), kThrusterMinAngle, kThrusterMaxAngle);
+  return map(constrainedAngle, kThrusterMinAngle, kThrusterMaxAngle, kEscMinUs, kEscMaxUs);
+}
+
+void writeEscMicroseconds(int leftSpeed, int rightSpeed, const char* source) {
+  leftSpeed = constrain(leftSpeed, kEscMinUs, kEscMaxUs);
+  rightSpeed = constrain(rightSpeed, kEscMinUs, kEscMaxUs);
 
   leftEsc.writeMicroseconds(leftSpeed);
   rightEsc.writeMicroseconds(rightSpeed);
@@ -157,19 +208,38 @@ void setMotorSpeeds(int leftSpeed, int rightSpeed) {
   Serial.print("MOTORS,LEFT=");
   Serial.print(leftSpeed);
   Serial.print(",RIGHT=");
-  Serial.println(rightSpeed);
+  Serial.print(rightSpeed);
+  Serial.print(",SOURCE=");
+  Serial.println(source);
+}
+
+void setMotorSpeeds(int leftSpeed, int rightSpeed) {
+  leftSpeed = constrain(leftSpeed, kEscNeutralUs, kMaxForwardUs);
+  rightSpeed = constrain(rightSpeed, kEscNeutralUs, kMaxForwardUs);
+  writeEscMicroseconds(leftSpeed, rightSpeed, "AUTO");
+}
+
+void setManualThrusterAngles(uint32_t leftAngle, uint32_t rightAngle, const char* source) {
+  if (leftAngle > kThrusterMaxAngle || rightAngle > kThrusterMaxAngle) {
+    Serial.println("ERROR,THRUST_RANGE_0_180");
+    return;
+  }
+
+  currentMode = BoatMode::Manual;
+  writeEscMicroseconds(
+      thrusterAngleToMicroseconds(leftAngle),
+      thrusterAngleToMicroseconds(rightAngle),
+      source);
 }
 
 void stopBoat() {
   currentMode = BoatMode::Idle;
-  leftEsc.writeMicroseconds(kEscNeutralUs);
-  rightEsc.writeMicroseconds(kEscNeutralUs);
-  Serial.println("MOTORS,LEFT=1500,RIGHT=1500");
+  writeEscMicroseconds(kEscNeutralUs, kEscNeutralUs, "STOP");
 }
 
 void printStatus() {
   Serial.print("STATUS,MODE=");
-  Serial.print(currentMode == BoatMode::Auto ? "AUTO" : "IDLE");
+  Serial.print(modeName(currentMode));
 
   if (hasGoodGPSFix()) {
     Serial.print(",LAT=");
@@ -207,6 +277,9 @@ void printStatus() {
     Serial.print(mag);
   }
 
+  Serial.print(",ESPNOW=");
+  Serial.print(espNowReady ? "READY" : "OFF");
+
   if (targetWaypoint.valid) {
     Serial.print(",TARGET_LAT=");
     Serial.print(targetWaypoint.latitude, 7);
@@ -238,6 +311,47 @@ void handleGotoCommand(const String& payload) {
   Serial.println(targetWaypoint.longitude, 7);
 }
 
+bool parseInteger(const String& text, int& value) {
+  String trimmed = text;
+  trimmed.trim();
+  if (trimmed.length() == 0) return false;
+
+  int startIndex = 0;
+  if (trimmed[0] == '-' || trimmed[0] == '+') {
+    if (trimmed.length() == 1) return false;
+    startIndex = 1;
+  }
+
+  for (int i = startIndex; i < trimmed.length(); ++i) {
+    if (!isDigit(trimmed[i])) return false;
+  }
+
+  value = trimmed.toInt();
+  return true;
+}
+
+void handleThrustCommand(const String& payload) {
+  const int commaIndex = payload.indexOf(',');
+  if (commaIndex < 0) {
+    Serial.println("ERROR,INVALID_THRUST_FORMAT");
+    return;
+  }
+
+  int leftAngle = 0;
+  int rightAngle = 0;
+  if (!parseInteger(payload.substring(0, commaIndex), leftAngle) ||
+      !parseInteger(payload.substring(commaIndex + 1), rightAngle)) {
+    Serial.println("ERROR,INVALID_THRUST_FORMAT");
+    return;
+  }
+
+  setManualThrusterAngles(leftAngle, rightAngle, "SERIAL");
+  Serial.print("ACK,THRUST,LEFT=");
+  Serial.print(leftAngle);
+  Serial.print(",RIGHT=");
+  Serial.println(rightAngle);
+}
+
 void handleSerialCommand(const String& rawCommand) {
   String command = rawCommand;
   command.trim();
@@ -254,8 +368,24 @@ void handleSerialCommand(const String& rawCommand) {
     return;
   }
 
+  if (command.equalsIgnoreCase("AUTO")) {
+    if (!targetWaypoint.valid) {
+      Serial.println("ERROR,NO_TARGET");
+      return;
+    }
+
+    currentMode = BoatMode::Auto;
+    Serial.println("ACK,AUTO");
+    return;
+  }
+
   if (command.startsWith("GOTO,")) {
     handleGotoCommand(command.substring(5));
+    return;
+  }
+
+  if (command.startsWith("THRUST,")) {
+    handleThrustCommand(command.substring(7));
     return;
   }
 
@@ -275,6 +405,133 @@ void readSerialCommands() {
       serialBuffer += input;
     }
   }
+}
+
+bool isValidLatitudeLongitude(double latitude, double longitude) {
+  return isfinite(latitude) && isfinite(longitude) &&
+         latitude >= -90.0 && latitude <= 90.0 &&
+         longitude >= -180.0 && longitude <= 180.0;
+}
+
+void printRecoveredPacket(const RecoveredControlPacket& packet, int len) {
+  Serial.print("ESPNOW_PACKET,LEN=");
+  Serial.print(len);
+  Serial.print(",TIME=");
+  Serial.print(packet.time);
+  Serial.print(",LEFT=");
+  Serial.print(packet.leftThruster);
+  Serial.print(",RIGHT=");
+  Serial.print(packet.rightThruster);
+  Serial.print(",NAV_MODE=");
+  Serial.print(packet.navigationMode);
+  Serial.print(",WP_FUNC=");
+  Serial.print(packet.waypointFunction);
+  Serial.print(",WP_ID=");
+  Serial.print(packet.waypointId);
+  Serial.print(",WP_LAT_E7=");
+  Serial.print(packet.waypointLatitude);
+  Serial.print(",WP_LON_E7=");
+  Serial.println(packet.waypointLongitude);
+}
+
+void applyRecoveredWaypoint(const RecoveredControlPacket& packet) {
+  const double latitude = static_cast<double>(packet.waypointLatitude) / kWaypointE7Scale;
+  const double longitude = static_cast<double>(packet.waypointLongitude) / kWaypointE7Scale;
+
+  if (!isValidLatitudeLongitude(latitude, longitude)) {
+    Serial.print("WARN,ESPNOW_WAYPOINT_INVALID,LAT=");
+    Serial.print(latitude, 7);
+    Serial.print(",LON=");
+    Serial.println(longitude, 7);
+    return;
+  }
+
+  targetWaypoint.latitude = latitude;
+  targetWaypoint.longitude = longitude;
+  targetWaypoint.valid = true;
+  currentMode = BoatMode::Auto;
+
+  Serial.print("TARGET_SET,SOURCE=ESPNOW,ID=");
+  Serial.print(packet.waypointId);
+  Serial.print(",LAT=");
+  Serial.print(targetWaypoint.latitude, 7);
+  Serial.print(",LON=");
+  Serial.println(targetWaypoint.longitude, 7);
+}
+
+void processRecoveredControlPacket(const RecoveredControlPacket& packet, int len) {
+  printRecoveredPacket(packet, len);
+
+  if (packet.waypointFunction != 0) {
+    applyRecoveredWaypoint(packet);
+  }
+
+  if (kAllowEspNowManualThrusterOverride &&
+      packet.leftThruster <= kThrusterMaxAngle &&
+      packet.rightThruster <= kThrusterMaxAngle) {
+    setManualThrusterAngles(packet.leftThruster, packet.rightThruster, "ESPNOW");
+  }
+}
+
+void queueRecoveredControlPacket(const uint8_t* incomingData, int len) {
+  if (incomingData == nullptr || len < static_cast<int>(sizeof(RecoveredControlPacket))) {
+    return;
+  }
+
+  RecoveredControlPacket packet;
+  memcpy(&packet, incomingData, sizeof(packet));
+
+  portENTER_CRITICAL(&espNowPacketMux);
+  pendingEspNowPacket = packet;
+  pendingEspNowPacketLength = len;
+  hasPendingEspNowPacket = true;
+  portEXIT_CRITICAL(&espNowPacketMux);
+}
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+void onEspNowDataRecv(const esp_now_recv_info_t* info, const uint8_t* incomingData, int len) {
+  (void)info;
+  queueRecoveredControlPacket(incomingData, len);
+}
+#else
+void onEspNowDataRecv(const uint8_t* mac, const uint8_t* incomingData, int len) {
+  (void)mac;
+  queueRecoveredControlPacket(incomingData, len);
+}
+#endif
+
+void pollEspNowPacket() {
+  RecoveredControlPacket packet;
+  int len = 0;
+  bool shouldProcess = false;
+
+  portENTER_CRITICAL(&espNowPacketMux);
+  if (hasPendingEspNowPacket) {
+    packet = pendingEspNowPacket;
+    len = pendingEspNowPacketLength;
+    hasPendingEspNowPacket = false;
+    shouldProcess = true;
+  }
+  portEXIT_CRITICAL(&espNowPacketMux);
+
+  if (shouldProcess) {
+    processRecoveredControlPacket(packet, len);
+  }
+}
+
+void setupEspNowReceiver() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  delay(100);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESPNOW,NOT_READY");
+    return;
+  }
+
+  espNowReady = true;
+  esp_now_register_recv_cb(onEspNowDataRecv);
+  Serial.println("ESPNOW,READY");
 }
 
 void runAutonomousController() {
@@ -357,10 +614,16 @@ void setup() {
 
   Serial.println("BOOT,AUTO_NAV");
 
-  leftEsc.setPeriodHertz(50);
-  rightEsc.setPeriodHertz(50);
-  leftEsc.attach(LEFT_ESC_PIN, 1000, 2000);
-  rightEsc.attach(RIGHT_ESC_PIN, 1000, 2000);
+  setupEspNowReceiver();
+
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  leftEsc.setPeriodHertz(kEscSignalHz);
+  rightEsc.setPeriodHertz(kEscSignalHz);
+  leftEsc.attach(LEFT_ESC_PIN, kEscMinUs, kEscMaxUs);
+  rightEsc.attach(RIGHT_ESC_PIN, kEscMinUs, kEscMaxUs);
   leftEsc.writeMicroseconds(kEscNeutralUs);
   rightEsc.writeMicroseconds(kEscNeutralUs);
   Serial.println("ESC,ARMING_NEUTRAL");
@@ -379,12 +642,13 @@ void setup() {
     Serial.println("BNO055,NOT_FOUND");
   }
 
-  Serial.println("READY,COMMANDS=GOTO,lat,lon|STOP|STATUS");
+  Serial.println("READY,COMMANDS=GOTO,lat,lon|THRUST,left,right|AUTO|STOP|STATUS");
 }
 
 void loop() {
   updateGPS();
   readSerialCommands();
+  pollEspNowPacket();
   runAutonomousController();
 
   if (millis() - lastStatusMs >= 1000) {

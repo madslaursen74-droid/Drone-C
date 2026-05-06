@@ -594,54 +594,48 @@
       }
 
       function handleEsp32Line(line) {
-        const satMatch = line.match(/^Satellites:\s*(\d+)/i);
+        const satMatch = line.match(/Satellites:\s*(\d+)/i);
         if (satMatch) {
           telemetry.satellites = Number(satMatch[1]);
           telemetry.message = "GPS stream active";
-          updateUi();
-          return;
         }
 
-        const shortSatMatch = line.match(/^sats\s*$/i);
+        const shortSatMatch = line.match(/(^|\s)sats\s*$/i);
         if (shortSatMatch) {
           return;
         }
 
-        const rawSatValueMatch = line.match(/^(\d+)$/);
+        const rawSatValueMatch = line.match(/(^|\s)(\d+)\s*$/);
         if (rawSatValueMatch) {
-          telemetry.satellites = Number(rawSatValueMatch[1]);
+          telemetry.satellites = Number(rawSatValueMatch[2]);
           telemetry.message = "GPS stream active";
-          updateUi();
-          return;
         }
 
-        const latMatch = line.match(/^Latitude:\s*([-\d.]+)/i);
+        const latMatch = line.match(/Latitude:\s*([-\d.]+)/i);
         if (latMatch) {
           telemetry.latitude = Number(latMatch[1]);
-          updateUi();
-          return;
         }
 
-        const lonMatch = line.match(/^Longitude:\s*([-\d.]+)/i);
+        const lonMatch = line.match(/Longitude:\s*([-\d.]+)/i);
         if (lonMatch) {
           telemetry.longitude = Number(lonMatch[1]);
-          updateUi();
-          return;
         }
 
-        const orientationMatch = line.match(/^Orientation:\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/i);
+        const orientationMatch = line.match(/Orientation:\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/i);
         if (orientationMatch) {
           telemetry.heading = Number(orientationMatch[1]);
           telemetry.message = "Orientation stream active";
-          updateUi();
-          return;
         }
 
-        const calibrationMatch = line.match(/^CALIB:\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/i);
+        const headingMatch = line.match(/Heading:\s*([-\d.]+)\s+Pitch:\s*([-\d.]+)\s+Roll:\s*([-\d.]+)/i);
+        if (headingMatch) {
+          telemetry.heading = Number(headingMatch[1]);
+          telemetry.message = "Heading stream active";
+        }
+
+        const calibrationMatch = line.match(/CALIB:\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/i);
         if (calibrationMatch) {
           telemetry.calibration = `${calibrationMatch[1]}/${calibrationMatch[2]}/${calibrationMatch[3]}/${calibrationMatch[4]}`;
-          updateUi();
-          return;
         }
 
         if (/Waiting for a good GPS fix/i.test(line)) {
@@ -649,6 +643,19 @@
           telemetry.latitude = null;
           telemetry.longitude = null;
           telemetry.distance = null;
+          updateUi();
+          return;
+        }
+
+        if (
+          satMatch ||
+          rawSatValueMatch ||
+          latMatch ||
+          lonMatch ||
+          orientationMatch ||
+          headingMatch ||
+          calibrationMatch
+        ) {
           updateUi();
           return;
         }
