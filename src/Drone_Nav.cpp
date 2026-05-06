@@ -131,9 +131,9 @@ void turnToPoint(double targetLat, double targetLon)
 
   
   if (turnAngle > 10) {
-    Serial.print("Turn right");
+    Serial.println("Turn right");
   } else if (turnAngle < -10) {
-    Serial.print("Turn left");
+    Serial.println("Turn left");
   } else {
     Serial.println("Already facing the target point");
   }
@@ -164,7 +164,7 @@ double distanceToPoint(double lat1, double lon1, double lat2, double lon2)
 void loop() {
   readBNOsensor();
   Serial.println("sats");
-  Serial.print(gps.satellites.value());
+  Serial.println(gps.satellites.value());
   delay(1000);
   updateGPS();
   GetGPSData();
