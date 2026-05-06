@@ -9,6 +9,7 @@ constexpr int RIGHT_ESC_PIN = 4;
 
 constexpr int ESC_NEUTRAL_US = 1500;
 constexpr int ESC_TEST_FORWARD_US = 1560;
+constexpr int ESC_TEST_REVERSE_US = 1440;
 constexpr int ESC_ARM_DELAY_MS = 3000;
 constexpr int TEST_RUN_MS = 2000;
 constexpr int TEST_PAUSE_MS = 2000;
@@ -35,10 +36,34 @@ void runRightMotorTest() {
   setBothNeutral();
 }
 
+void runLeftMotorReverseTest() {
+  Serial.println("Testing LEFT motor reverse...");
+  leftEsc.writeMicroseconds(ESC_TEST_REVERSE_US);
+  rightEsc.writeMicroseconds(ESC_NEUTRAL_US);
+  delay(TEST_RUN_MS);
+  setBothNeutral();
+}
+
+void runRightMotorReverseTest() {
+  Serial.println("Testing RIGHT motor reverse...");
+  leftEsc.writeMicroseconds(ESC_NEUTRAL_US);
+  rightEsc.writeMicroseconds(ESC_TEST_REVERSE_US);
+  delay(TEST_RUN_MS);
+  setBothNeutral();
+}
+
 void runBothMotorsTest() {
-  Serial.println("Testing BOTH motors...");
+  Serial.println("Testing BOTH motors forward...");
   leftEsc.writeMicroseconds(ESC_TEST_FORWARD_US);
   rightEsc.writeMicroseconds(ESC_TEST_FORWARD_US);
+  delay(TEST_RUN_MS);
+  setBothNeutral();
+}
+
+void runBothMotorsReverseTest() {
+  Serial.println("Testing BOTH motors reverse...");
+  leftEsc.writeMicroseconds(ESC_TEST_REVERSE_US);
+  rightEsc.writeMicroseconds(ESC_TEST_REVERSE_US);
   delay(TEST_RUN_MS);
   setBothNeutral();
 }
@@ -49,6 +74,7 @@ void setup() {
   Serial.println("ESC ground test starting");
   Serial.println("LEFT ESC pin = GPIO18");
   Serial.println("RIGHT ESC pin = GPIO4");
+  Serial.println("Test sequence: left forward, right forward, left reverse, right reverse, both forward, both reverse");
 
   leftEsc.setPeriodHertz(50);
   rightEsc.setPeriodHertz(50);
@@ -69,6 +95,15 @@ void loop() {
   runRightMotorTest();
   delay(TEST_PAUSE_MS);
 
+  runLeftMotorReverseTest();
+  delay(TEST_PAUSE_MS);
+
+  runRightMotorReverseTest();
+  delay(TEST_PAUSE_MS);
+
   runBothMotorsTest();
+  delay(TEST_PAUSE_MS);
+
+  runBothMotorsReverseTest();
   delay(4000);
 }
