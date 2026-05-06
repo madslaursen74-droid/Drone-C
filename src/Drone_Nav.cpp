@@ -14,6 +14,10 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
 #define GPS_RX 34
 
+double HardcodedTargets[][2] = {{55.6761, 12.5683},
+                                {57.5353, 13.2683},
+                                {60.3262, 13.3483}};
+
 
 void updateGPS()
 {
@@ -144,6 +148,27 @@ void turnToPoint(double targetLat, double targetLon)
   }
 }
 
+double distanceToPoint(double lat1, double lon1, double lat2, double lon2)
+{
+  lat1 = radians(lat1);
+  lon1 = radians(lon1);
+  lat2 = radians(lat2);
+  lon2 = radians(lon2);
+
+  double dLat = lat2 - lat1;
+  double dLon = lon2 - lon1;
+
+  double a = sin(dLat/2) * sin(dLat/2) +
+             cos(lat1) * cos(lat2) *
+             sin(dLon/2) * sin(dLon/2);
+
+  double c = 2 * atan2(sqrt(a), sqrt(1-a));
+
+  double distance = 6371000 * c; // Earth radius in meters
+
+  return distance;
+}
+
     
 void loop() {
   readBNOsensor();
@@ -154,5 +179,16 @@ void loop() {
   GetGPSData();
   delay(1000);
 
-  turnToPoint(55.6761, 12.5683);
+  for (int i = 0; i < 3; i++) {
+    if (distanceToPoint(gps.location.lat(), gps.location.lng(), HardcodedTargets[i][0], HardcodedTargets[i][1]) > 5) {
+      turnToPoint(HardcodedTargets[i][0], HardcodedTargets[i][1]);
+      updateGPS();
+      // turn function
+      // Forward function
+      delay(500);
+    }
+    else {
+      Serial.print("Reached target point ");
+    }
+  }
 }
