@@ -26,9 +26,14 @@ constexpr float ARRIVAL_RADIUS_METERS = 3.0f;
 constexpr float HEADING_KP = 2.0f;
 constexpr float HEADING_DEADBAND = 4.0f;
 
-double targetLat = 0.0;
-double targetLon = 0.0;
-bool hasTarget = false;
+double waypoints[][2] = {
+  {55.6761, 12.5683},
+  {57.5353, 13.2683},
+  {60.3262, 13.3483}
+};
+
+constexpr int WAYPOINT_COUNT = sizeof(waypoints) / sizeof(waypoints[0]);
+int currentWaypointIndex = 0;
 
 void updateGPS() {
   while (gpsSerial.available()) {
@@ -127,7 +132,11 @@ void stopBoat() {
 
 void printStatus() {
   Serial.print("STATUS,MODE=");
-  Serial.print(hasTarget ? "AUTO" : "IDLE");
+  if (currentWaypointIndex < WAYPOINT_COUNT) {
+    Serial.print("AUTO");
+  } else {
+    Serial.print("DONE");
+  }
 
   if (hasGoodGPSFix()) {
     Serial.print(",LAT=");
@@ -161,64 +170,20 @@ void printStatus() {
   Serial.print("/");
   Serial.print(mag);
 
-  if (hasTarget) {
+  if (currentWaypointIndex < WAYPOINT_COUNT) {
     Serial.print(",TARGET_LAT=");
-    Serial.print(targetLat, 7);
+    Serial.print(waypoints[currentWaypointIndex][0], 7);
     Serial.print(",TARGET_LON=");
-    Serial.print(targetLon, 7);
+    Serial.print(waypoints[currentWaypointIndex][1], 7);
+    Serial.print(",WAYPOINT_INDEX=");
+    Serial.print(currentWaypointIndex);
   }
 
   Serial.println();
 }
 
-void setTargetFromCommand(const String& payload) {
-  const int commaIndex = payload.indexOf(',');
-  if (commaIndex < 0) {
-    Serial.println("ERROR,INVALID_GOTO_FORMAT");
-    return;
-  }
-
-  targetLat = payload.substring(0, commaIndex).toDouble();
-  targetLon = payload.substring(commaIndex + 1).toDouble();
-  hasTarget = true;
-
-  Serial.print("TARGET_SET,LAT=");
-  Serial.print(targetLat, 7);
-  Serial.print(",LON=");
-  Serial.println(targetLon, 7);
-}
-
-void readSerialCommands() {
-  static String input;
-
-  while (Serial.available()) {
-    char c = static_cast<char>(Serial.read());
-
-    if (c == '\n' || c == '\r') {
-      input.trim();
-
-      if (input.equalsIgnoreCase("STOP")) {
-        hasTarget = false;
-        stopBoat();
-        Serial.println("ACK,STOP");
-      } else if (input.equalsIgnoreCase("STATUS")) {
-        printStatus();
-      } else if (input.startsWith("GOTO,")) {
-        setTargetFromCommand(input.substring(5));
-      } else if (input.length() > 0) {
-        Serial.print("ERROR,UNKNOWN_COMMAND=");
-        Serial.println(input);
-      }
-
-      input = "";
-    } else {
-      input += c;
-    }
-  }
-}
-
 void runAutoNavigation() {
-  if (!hasTarget) {
+  if (currentWaypointIndex >= WAYPOINT_COUNT) {
     return;
   }
 
@@ -237,11 +202,14 @@ void runAutoNavigation() {
 
   const double currentLat = gps.location.lat();
   const double currentLon = gps.location.lng();
+  const double targetLat = waypoints[currentWaypointIndex][0];
+  const double targetLon = waypoints[currentWaypointIndex][1];
   const double distance = calculateDistanceMeters(currentLat, currentLon, targetLat, targetLon);
 
   if (distance <= ARRIVAL_RADIUS_METERS) {
-    Serial.println("ARRIVED");
-    hasTarget = false;
+    Serial.print("ARRIVED,WAYPOINT=");
+    Serial.println(currentWaypointIndex);
+    currentWaypointIndex++;
     stopBoat();
     return;
   }
@@ -264,6 +232,8 @@ void runAutoNavigation() {
 
   Serial.print("AUTO,DIST=");
   Serial.print(distance, 2);
+  Serial.print(",WAYPOINT=");
+  Serial.print(currentWaypointIndex);
   Serial.print(",BEARING=");
   Serial.print(targetBearing, 1);
   Serial.print(",HEADING=");
@@ -307,12 +277,12 @@ void setup() {
 
   gpsSerial.begin(9600, SERIAL_8N1, GPS_RX);
 
-  Serial.println("READY,COMMANDS=GOTO,lat,lon|STOP|STATUS");
+  Serial.print("READY,WAYPOINTS=");
+  Serial.println(WAYPOINT_COUNT);
 }
 
 void loop() {
   updateGPS();
-  readSerialCommands();
   runAutoNavigation();
 
   static unsigned long lastStatus = 0;
