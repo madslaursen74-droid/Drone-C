@@ -6,13 +6,32 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
+#include <ESP32Servo.h>
 
 
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
-#define GPS_RX 17
+#define GPS_RX 16
+
+constexpr int LEFT_ESC_PIN = 18;
+constexpr int RIGHT_ESC_PIN = 4;
+
+constexpr int ESC_MIN_US = 1000;
+constexpr int ESC_MAX_US = 2000;
+constexpr int ESC_STOP_US = 1500;
+constexpr int ESC_FORWARD_US = 1640;
+constexpr int ESC_SLOW_US = 1575;
+
+constexpr float ARRIVAL_RADIUS_METERS = 3.0f;
+constexpr float HEADING_KP = 2.0f;
+constexpr float HEADING_DEADBAND = 4.0f;
+
+int currentWaypointIndex = 0;
+
+Servo leftEsc;
+Servo rightEsc;
 
 double HardcodedTargets[][2] = {{55.6761, 12.5683},
                                 {57.5353, 13.2683},
@@ -43,10 +62,31 @@ void GetGPSData()
 
   }
 }
+void setMotors(int leftUs, int rightUs) {
+  leftUs = constrain(leftUs, ESC_MIN_US, ESC_MAX_US);
+  rightUs = constrain(rightUs, ESC_MIN_US, ESC_MAX_US);
+
+  leftEsc.writeMicroseconds(leftUs);
+  rightEsc.writeMicroseconds(rightUs);
+}
+void stopBoat() {
+  setMotors(ESC_STOP_US, ESC_STOP_US);
+}
 
 void setup() {
   // put your setup code here, to run once:
  Serial.begin(115200);
+ ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
+  leftEsc.setPeriodHertz(50);
+  rightEsc.setPeriodHertz(50);
+  leftEsc.attach(LEFT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
+  rightEsc.attach(RIGHT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
+
+  stopBoat();
  delay(3000);
  Wire.begin(21, 22);
  Wire.setClock(100000); 
@@ -120,11 +160,11 @@ double angleDifference(double targetBearing, double currentHeading)
   return diff;
 }
 
-void turnToPoint(double targetLat, double targetLon)
+double turnToPoint(double targetLat, double targetLon)
 {
   if (!gps.location.isValid()) {
     Serial.println("GPS location not valid");
-    return;
+    return 0;
   }
 
   double currentLat = gps.location.lat();
@@ -139,13 +179,7 @@ void turnToPoint(double targetLat, double targetLon)
   double turnAngle = angleDifference(targetBearing, currentHeading);
 
   
-  if (turnAngle > 10) {
-    Serial.println("Turn right");
-  } else if (turnAngle < -10) {
-    Serial.println("Turn left");
-  } else {
-    Serial.println("Already facing the target point");
-  }
+ return turnAngle;
 }
 
 double distanceToPoint(double lat1, double lon1, double lat2, double lon2)
@@ -169,6 +203,35 @@ double distanceToPoint(double lat1, double lon1, double lat2, double lon2)
   return distance;
 }
 
+float headingErrorDegrees(float target, float current) {
+  float error = target - current;
+
+  while (error > 180.0f) error -= 360.0f;
+  while (error < -180.0f) error += 360.0f;
+
+  if (fabs(error) < HEADING_DEADBAND) {
+    error = 0.0f;
+  }
+
+  return error;
+}
+
+
+
+void goToCurrentWaypoint(double distance, float error) {
+
+ int baseSpeed = ESC_FORWARD_US;
+  if (distance < 8.0 || fabs(error) > 35.0f) {
+    baseSpeed = ESC_SLOW_US;
+  }
+
+  const int correction = static_cast<int>(round(HEADING_KP * error));
+  const int leftSpeed = constrain(baseSpeed + correction, ESC_STOP_US, ESC_MAX_US);
+  const int rightSpeed = constrain(baseSpeed - correction, ESC_STOP_US, ESC_MAX_US);
+
+  setMotors(leftSpeed, rightSpeed);
+}
+
     
 void loop() {
   readBNOsensor();
@@ -178,17 +241,31 @@ void loop() {
   updateGPS();
   GetGPSData();
   delay(1000);
+  updateGPS();
+if (gps.location.isValid()) {
 
+  
   for (int i = 0; i < 3; i++) {
+    updateGPS();
     if (distanceToPoint(gps.location.lat(), gps.location.lng(), HardcodedTargets[i][0], HardcodedTargets[i][1]) > 5) {
-      turnToPoint(HardcodedTargets[i][0], HardcodedTargets[i][1]);
+      double error = turnToPoint(HardcodedTargets[i][0], HardcodedTargets[i][1]);
+      double distance = distanceToPoint(gps.location.lat(), gps.location.lng(), HardcodedTargets[i][0], HardcodedTargets[i][1]);
       updateGPS();
-      // turn function
-      // Forward function
-      delay(500);
+      Serial.println(distance);
+      Serial.println(error);
+      goToCurrentWaypoint(distance, error);
+      delay(5000);
     }
+
     else {
       Serial.print("Reached target point ");
     }
+  }
+  }
+  else {
+    Serial.println("Waiting for valid GPS location...");
+    stopBoat();
+    updateGPS();
+    delay(2000);
   }
 }
