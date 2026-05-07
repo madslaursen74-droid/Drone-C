@@ -1,147 +1,132 @@
 #include <Wire.h>
 #include <Arduino.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include <TinyGPS++.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
-#include <utility/imumaths.h>
 #include <ESP32Servo.h>
+#include <Preferences.h>
 
+Preferences prefs;
 
+// ---------- GPS + COMPASS ----------
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
 #define GPS_RX 16
 
-constexpr int LEFT_ESC_PIN = 4;
+// ---------- MOTOR PINS ----------
+constexpr int LEFT_ESC_PIN  = 4;
 constexpr int RIGHT_ESC_PIN = 18;
 
-constexpr int ESC_MIN_US = 1000;
-constexpr int ESC_MAX_US = 2000;
-constexpr int ESC_STOP_US = 1500;
+// ---------- ESC VALUES ----------
+constexpr int ESC_MIN_US     = 1000;
+constexpr int ESC_MAX_US     = 2000;
+constexpr int ESC_STOP_US    = 1500;
+constexpr int ESC_SLOW_US    = 1575;
 constexpr int ESC_FORWARD_US = 1640;
-constexpr int ESC_SLOW_US = 1575;
-constexpr int ESC_MAX_TURN_CHANGE_US = 120;
 
-constexpr float ARRIVAL_RADIUS_METERS = 3.0f;
-constexpr float HEADING_KP = 2.0f;
-constexpr float HEADING_DEADBAND = 10.0f;
+// Maximum extra motor difference while turning
+constexpr int MAX_TURN_POWER = 180;
 
-int currentWaypointIndex = 0;
+// ---------- NAVIGATION SETTINGS ----------
+constexpr float ARRIVAL_RADIUS_METERS = 3.0;
+constexpr float SLOW_DISTANCE_METERS  = 8.0;
+constexpr float HEADING_DEADBAND      = 8.0;
 
+// Higher = turns harder for same angle error
+constexpr float TURN_KP = 3.0;
+
+// Load BNO055 calibration data from EEPROM
+#define EEPROM_SIZE 128
+#define CALIB_FLAG_ADDR 0
+#define CALIB_DATA_ADDR 1
+
+adafruit_bno055_offsets_t calibData;
+
+bool loadCalibration() {
+  adafruit_bno055_offsets_t calibData;
+
+  prefs.begin("bno055", true);
+
+  if (!prefs.isKey("calib")) {
+    Serial.println("No saved calibration found");
+    prefs.end();
+    return false;
+  }
+
+  prefs.getBytes("calib", &calibData, sizeof(calibData));
+  prefs.end();
+
+  bno.setSensorOffsets(calibData);
+  Serial.println("Calibration loaded");
+  return true;
+}
+
+// ---------- WAYPOINTS ----------
+double waypoints[][2] = {
+  {56.458900, 9.403400},
+  {57.5353, 13.2683},
+  {60.3262, 13.3483}
+};
+
+constexpr int WAYPOINT_COUNT = sizeof(waypoints) / sizeof(waypoints[0]);
+
+int currentWaypoint = 0;
+bool waitingAtWaypoint = false;
+unsigned long waitStartTime = 0;
+constexpr unsigned long WAIT_TIME_MS = 5000;
+
+// ---------- MOTORS ----------
 Servo leftEsc;
 Servo rightEsc;
 
-double HardcodedTargets[][2] = {{56.458900, 9.403400},
-                                {57.5353, 13.2683},
-                                {60.3262, 13.3483}};
-
-constexpr int WAYPOINT_COUNT = sizeof(HardcodedTargets) / sizeof(HardcodedTargets[0]);
-constexpr unsigned long WAYPOINT_STOP_TIME_MS = 5000;
-
-bool waitingAtWaypoint = false;
-unsigned long waypointStopStartTime = 0;
-
-
-void updateGPS()
-{
-  while (gpsSerial.available())
-  {
+// ---------- GPS UPDATE ----------
+void updateGPS() {
+  while (gpsSerial.available()) {
     gps.encode(gpsSerial.read());
   }
 }
 
-
-void GetGPSData()
-{
-  updateGPS();
-
-  if (gps.satellites.value() > 5 && gps.location.isValid())
-  {
-    Serial.print("Satellites: ");
-    Serial.println(gps.satellites.value());
-    Serial.print("Longitude: ");
-    Serial.println(gps.location.lng(), 7);
-    Serial.print("Latitude: "); 
-    Serial.println(gps.location.lat(), 7);
-
-  }
-}
+// ---------- MOTOR CONTROL ----------
 void setMotors(int leftUs, int rightUs) {
   leftUs = constrain(leftUs, ESC_MIN_US, ESC_MAX_US);
   rightUs = constrain(rightUs, ESC_MIN_US, ESC_MAX_US);
 
   leftEsc.writeMicroseconds(leftUs);
   rightEsc.writeMicroseconds(rightUs);
+
+  Serial.print("Left: ");
+  Serial.print(leftUs);
+  Serial.print(" Right: ");
+  Serial.println(rightUs);
 }
+
 void stopBoat() {
   setMotors(ESC_STOP_US, ESC_STOP_US);
 }
 
-void setup() {
-  // put your setup code here, to run once:
- Serial.begin(115200);
- ESP32PWM::allocateTimer(0);
-  ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2);
-  ESP32PWM::allocateTimer(3);
+// ---------- DISTANCE TO WAYPOINT ----------
+double distanceToPoint(double lat1, double lon1, double lat2, double lon2) {
+  lat1 = radians(lat1);
+  lon1 = radians(lon1);
+  lat2 = radians(lat2);
+  lon2 = radians(lon2);
 
-  leftEsc.setPeriodHertz(50);
-  rightEsc.setPeriodHertz(50);
-  leftEsc.attach(LEFT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
-  rightEsc.attach(RIGHT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
+  double dLat = lat2 - lat1;
+  double dLon = lon2 - lon1;
 
-  stopBoat();
- delay(3000);
- Wire.begin(21, 22);
- Wire.setClock(100000); 
- Serial.println("starting GPS... ");
- gpsSerial.begin(9600, SERIAL_8N1, GPS_RX);
+  double a = sin(dLat / 2) * sin(dLat / 2) +
+             cos(lat1) * cos(lat2) *
+             sin(dLon / 2) * sin(dLon / 2);
 
- if(!bno.begin())
+  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
 
-  {
-
-    /* There was a problem detecting the BNO055 ... check your connections */
-    Serial.print("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
-    while(1);
-  }
-  bno.setAxisRemap(Adafruit_BNO055::REMAP_CONFIG_P1);
-  bno.setAxisSign(Adafruit_BNO055::REMAP_SIGN_P1);
-delay(1000);
-    
-bno.setExtCrystalUse(true);
-
+  return 6371000.0 * c;
 }
 
-void readBNOsensor()
-{
-  sensors_event_t event; 
-  bno.getEvent(&event);
-  Serial.print("Heading: ");
-  Serial.print(event.orientation.x, 4);
-
-  Serial.print(" Pitch: ");
-  Serial.print(event.orientation.y, 4);
-
-  
-
-
-  uint8_t sys, gyro, accel, mag;
-  bno.getCalibration(&sys, &gyro, &accel, &mag);
-
-  Serial.print("CALIB: ");
-  Serial.print(sys); Serial.print(" ");
-  Serial.print(gyro); Serial.print(" ");
-  Serial.print(accel); Serial.print(" ");
-  Serial.println(mag);
-
-}
-
-double bearingToPoint(double lat1, double lon1, double lat2, double lon2)
-{
+// ---------- BEARING TO WAYPOINT ----------
+double bearingToPoint(double lat1, double lon1, double lat2, double lon2) {
   lat1 = radians(lat1);
   lon1 = radians(lon1);
   lat2 = radians(lat2);
@@ -160,174 +145,200 @@ double bearingToPoint(double lat1, double lon1, double lat2, double lon2)
   return bearing;
 }
 
-double angleDifference(double targetBearing, double currentHeading)
-{
-  double diff = targetBearing - currentHeading;
+// ---------- ANGLE DIFFERENCE ----------
+float angleDifference(float target, float current) {
+  float headingError = target - current;
 
-  while (diff > 180) diff -= 360;
-  while (diff < -180) diff += 360;
+  while (headingError > 180) headingError -= 360;
+  while (headingError < -180) headingError += 360;
 
-  return diff;
-}
-
-double turnToPoint(double targetLat, double targetLon)
-{
-  if (!gps.location.isValid()) {
-    Serial.println("GPS location not valid");
-    return 0;
+  if (fabs(headingError) < HEADING_DEADBAND) {
+    headingError = 0;
   }
 
+  return headingError;
+}
+
+// ---------- GET CURRENT HEADING ----------
+float getHeading() {
+  sensors_event_t event;
+  bno.getEvent(&event);
+
+  return event.orientation.x;
+}
+
+// BNO055 calibration printout
+void printCalibration() {
+  uint8_t sys, gyro, accel, mag;
+  bno.getCalibration(&sys, &gyro, &accel, &mag);
+
+  Serial.print("CALIB -> ");
+  Serial.print("SYS:");
+  Serial.print(sys);
+  Serial.print(" G:");
+  Serial.print(gyro);
+  Serial.print(" A:");
+  Serial.print(accel);
+  Serial.print(" M:");
+  Serial.println(mag);
+}
+
+// ---------- DRIVE TOWARDS WAYPOINT ----------
+void driveToWaypoint(double targetLat, double targetLon) {
   double currentLat = gps.location.lat();
   double currentLon = gps.location.lng();
 
+  double distance = distanceToPoint(currentLat, currentLon, targetLat, targetLon);
   double targetBearing = bearingToPoint(currentLat, currentLon, targetLat, targetLon);
-  
-  sensors_event_t event; 
-  bno.getEvent(&event);
-  double currentHeading = event.orientation.x;
 
-  double turnAngle = angleDifference(targetBearing, currentHeading);
+  float currentHeading = getHeading();
+  float headingError = angleDifference(targetBearing, currentHeading);
 
-  
- return turnAngle;
-}
+  Serial.print("Waypoint: ");
+  Serial.println(currentWaypoint);
 
-double distanceToPoint(double lat1, double lon1, double lat2, double lon2)
-{
-  lat1 = radians(lat1);
-  lon1 = radians(lon1);
-  lat2 = radians(lat2);
-  lon2 = radians(lon2);
+  Serial.print("Distance: ");
+  Serial.println(distance);
 
-  double dLat = lat2 - lat1;
-  double dLon = lon2 - lon1;
+  Serial.print("Target bearing: ");
+  Serial.println(targetBearing);
 
-  double a = sin(dLat/2) * sin(dLat/2) +
-             cos(lat1) * cos(lat2) *
-             sin(dLon/2) * sin(dLon/2);
+  Serial.print("Heading: ");
+  Serial.println(currentHeading);
 
-  double c = 2 * atan2(sqrt(a), sqrt(1-a));
+  Serial.print("Turn error: ");
+  Serial.println(headingError);
 
-  double distance = 6371000 * c; // Earth radius in meters
-
-  return distance;
-}
-
-float headingErrorDegrees(float target, float current) {
-  float error = target - current;
-
-  while (error > 180.0f) error -= 360.0f;
-  while (error < -180.0f) error += 360.0f;
-
-  if (fabs(error) < HEADING_DEADBAND) {
-    error = 0.0f;
-  }
-
-  return error;
-}
-
-
-
-void forward(int speedUs) {
-  speedUs = constrain(speedUs, ESC_STOP_US, ESC_MAX_US);
-  Serial.println("Direction: FORWARD");
-  setMotors(speedUs, speedUs);
-}
-
-void turn(float error) {
-  int turnChange = static_cast<int>(round(fabs(error) * HEADING_KP));
-  turnChange = constrain(turnChange, 0, ESC_MAX_TURN_CHANGE_US);
-
-  int slowMotorSpeed = ESC_SLOW_US;
-  int fastMotorSpeed = constrain(ESC_SLOW_US + turnChange, ESC_STOP_US, ESC_MAX_US);
-
-  if (error > 0) {
-    Serial.println("Direction: RIGHT");
-    setMotors(fastMotorSpeed, slowMotorSpeed);
-  }
-  else {
-    Serial.println("Direction: LEFT");
-    setMotors(slowMotorSpeed, fastMotorSpeed);
-  }
-}
-
-void goToCurrentWaypoint(double distance, float error) {
-  int speed = ESC_FORWARD_US;
-  if (distance < 8.0) {
-    speed = ESC_SLOW_US;
-  }
-
-  if (fabs(error) <= HEADING_DEADBAND) {
-    forward(speed);
-  }
-  else {
-    turn(error);
-  }
-}
-
-    
-void loop() {
-  readBNOsensor();
-  Serial.println("sats");
-  Serial.println(gps.satellites.value());
-  delay(1000);
-  updateGPS();
-  GetGPSData();
-  delay(1000);
-  updateGPS();
-
-  if (gps.location.isValid()) {
-    if (currentWaypointIndex >= WAYPOINT_COUNT) {
-      Serial.println("All target points reached");
-      stopBoat();
-      return;
-    }
-
-    if (waitingAtWaypoint) {
-      stopBoat();
-
-      if (millis() - waypointStopStartTime >= WAYPOINT_STOP_TIME_MS) {
-        Serial.print("Leaving target point ");
-        Serial.println(currentWaypointIndex);
-        currentWaypointIndex++;
-        waitingAtWaypoint = false;
-      }
-
-      delay(200);
-      return;
-    }
-
-    double targetLat = HardcodedTargets[currentWaypointIndex][0];
-    double targetLon = HardcodedTargets[currentWaypointIndex][1];
-    double distance = distanceToPoint(
-      gps.location.lat(),
-      gps.location.lng(),
-      targetLat,
-      targetLon
-    );
-
-    if (distance <= ARRIVAL_RADIUS_METERS) {
-      Serial.print("Reached target point ");
-      Serial.println(currentWaypointIndex);
-      stopBoat();
-      waitingAtWaypoint = true;
-      waypointStopStartTime = millis();
-      delay(200);
-      return;
-    }
-
-    double error = turnToPoint(targetLat, targetLon);
-    Serial.print("Distance: ");
-    Serial.println(distance);
-    Serial.print("Angle: ");
-    Serial.println(error);
-    goToCurrentWaypoint(distance, error);
-    delay(200);
-  }
-  else {
-    Serial.println("Waiting for valid GPS location...");
+  // If arrived, stop and wait
+  if (distance <= ARRIVAL_RADIUS_METERS) {
+    Serial.println("Reached waypoint");
     stopBoat();
-    updateGPS();
-    delay(2000);
+
+    waitingAtWaypoint = true;
+    waitStartTime = millis();
+    return;
   }
+
+  // Slow down close to waypoint
+  int baseSpeed = ESC_FORWARD_US;
+  if (distance < SLOW_DISTANCE_METERS) {
+    baseSpeed = ESC_SLOW_US;
+  }
+
+  // Bigger angle error = stronger turn
+  int turnPower = abs(headingError) * TURN_KP;
+  turnPower = constrain(turnPower, 0, MAX_TURN_POWER);
+
+  int leftSpeed = baseSpeed;
+  int rightSpeed = baseSpeed;
+
+  if (headingError > 0) {
+    // Turn right
+    leftSpeed  = baseSpeed + turnPower;
+    rightSpeed = baseSpeed - turnPower;
+    Serial.println("Turning RIGHT");
+  }
+  else if (headingError < 0) {
+    // Turn left
+    leftSpeed  = baseSpeed - turnPower;
+    rightSpeed = baseSpeed + turnPower;
+    Serial.println("Turning LEFT");
+  }
+  else {
+    Serial.println("Going STRAIGHT");
+  }
+
+  // Do not allow reverse here, only stop-to-forward range
+  leftSpeed = constrain(leftSpeed, ESC_STOP_US, ESC_MAX_US);
+  rightSpeed = constrain(rightSpeed, ESC_STOP_US, ESC_MAX_US);
+
+  setMotors(leftSpeed, rightSpeed);
+}
+
+// ---------- SETUP ----------
+void setup() {
+  Serial.begin(115200);
+
+
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
+  leftEsc.setPeriodHertz(50);
+  rightEsc.setPeriodHertz(50);
+
+  leftEsc.attach(LEFT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
+  rightEsc.attach(RIGHT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
+
+  Serial.println("Arming ESCs...");
+  stopBoat();
+  delay(5000);
+
+  Wire.begin(21, 22);
+  Wire.setClock(100000);
+
+  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX);
+
+  if (!bno.begin()) {
+    Serial.println("BNO055 not detected!");
+    while (1);
+  }
+
+  // Your remap
+  bno.setAxisRemap(Adafruit_BNO055::REMAP_CONFIG_P1);
+  bno.setAxisSign(Adafruit_BNO055::REMAP_SIGN_P1);
+
+  loadCalibration();
+
+  delay(1000);
+  bno.setExtCrystalUse(true);
+
+
+
+  Serial.println("Ready");
+}
+
+// ---------- MAIN LOOP ----------
+void loop() {
+  updateGPS();
+
+  if (!gps.location.isValid()) {
+    Serial.print("Waiting for GPS. Sats: ");
+    Serial.println(gps.satellites.value());
+    stopBoat();
+    delay(500);
+    return;
+  }
+
+  if (currentWaypoint >= WAYPOINT_COUNT) {
+    Serial.println("All waypoints reached");
+    stopBoat();
+    delay(1000);
+    return;
+  }
+
+  if (waitingAtWaypoint) {
+    stopBoat();
+
+    if (millis() - waitStartTime >= WAIT_TIME_MS) {
+      currentWaypoint++;
+      waitingAtWaypoint = false;
+
+      Serial.print("Going to next waypoint: ");
+      Serial.println(currentWaypoint);
+    }
+
+    delay(200);
+    return;
+  }
+
+  double targetLat = waypoints[currentWaypoint][0];
+  double targetLon = waypoints[currentWaypoint][1];
+
+  driveToWaypoint(targetLat, targetLon);
+
+  printCalibration();
+
+  delay(200);
 }
