@@ -15,6 +15,7 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
 #define GPS_RX 16
 
+#pragma region Variables and Constants
 // ---------- MOTOR PINS ----------
 constexpr int LEFT_ESC_PIN  = 4;
 constexpr int RIGHT_ESC_PIN = 18;
@@ -33,6 +34,7 @@ constexpr int MAX_TURN_POWER = 180;
 constexpr float ARRIVAL_RADIUS_METERS = 3.0;
 constexpr float SLOW_DISTANCE_METERS  = 8.0;
 constexpr float HEADING_DEADBAND      = 8.0;
+constexpr float HEADING_OFFSET = 171.0;  // tune this value
 
 // Higher = turns harder for same angle error
 constexpr float TURN_KP = 3.0;
@@ -41,9 +43,11 @@ constexpr float TURN_KP = 3.0;
 #define EEPROM_SIZE 128
 #define CALIB_FLAG_ADDR 0
 #define CALIB_DATA_ADDR 1
+#pragma endregion
 
 adafruit_bno055_offsets_t calibData;
 
+#pragma region BNO055 Calibration
 bool loadCalibration() {
   adafruit_bno055_offsets_t calibData;
 
@@ -62,12 +66,13 @@ bool loadCalibration() {
   Serial.println("Calibration loaded");
   return true;
 }
+#pragma endregion
 
 // ---------- WAYPOINTS ----------
 double waypoints[][2] = {
-  {56.458900, 9.403400},
-  {57.5353, 13.2683},
-  {60.3262, 13.3483}
+  {56.458813, 9.402023},
+  {56.458836, 9.401664},
+  {56.459139, 9.401754}
 };
 
 constexpr int WAYPOINT_COUNT = sizeof(waypoints) / sizeof(waypoints[0]);
@@ -88,6 +93,7 @@ void updateGPS() {
   }
 }
 
+#pragma region Boat functions
 // ---------- MOTOR CONTROL ----------
 void setMotors(int leftUs, int rightUs) {
   leftUs = constrain(leftUs, ESC_MIN_US, ESC_MAX_US);
@@ -105,7 +111,9 @@ void setMotors(int leftUs, int rightUs) {
 void stopBoat() {
   setMotors(ESC_STOP_US, ESC_STOP_US);
 }
+#pragma endregion
 
+#pragma region Navigation calculations
 // ---------- DISTANCE TO WAYPOINT ----------
 double distanceToPoint(double lat1, double lon1, double lat2, double lon2) {
   lat1 = radians(lat1);
@@ -164,8 +172,14 @@ float getHeading() {
   sensors_event_t event;
   bno.getEvent(&event);
 
-  return event.orientation.x;
+  float heading = event.orientation.x + HEADING_OFFSET;
+
+  while (heading >= 360) heading -= 360;
+  while (heading < 0) heading += 360;
+
+  return heading;
 }
+#pragma endregion
 
 // BNO055 calibration printout
 void printCalibration() {
@@ -183,6 +197,7 @@ void printCalibration() {
   Serial.println(mag);
 }
 
+#pragma region Boat Movement
 // ---------- DRIVE TOWARDS WAYPOINT ----------
 void driveToWaypoint(double targetLat, double targetLon) {
   double currentLat = gps.location.lat();
@@ -254,7 +269,9 @@ void driveToWaypoint(double targetLat, double targetLon) {
 
   setMotors(leftSpeed, rightSpeed);
 }
+#pragma endregion
 
+#pragma region Setup
 // ---------- SETUP ----------
 void setup() {
   Serial.begin(115200);
@@ -294,12 +311,12 @@ void setup() {
   delay(1000);
   bno.setExtCrystalUse(true);
 
-
-
   Serial.println("Ready");
 }
+#pragma endregion
 
 // ---------- MAIN LOOP ----------
+#pragma region Main Loop
 void loop() {
   updateGPS();
 
@@ -342,3 +359,4 @@ void loop() {
 
   delay(200);
 }
+#pragma endregion
