@@ -6,6 +6,8 @@
 #include <ESP32Servo.h>
 #include <Preferences.h>
 
+HardwareSerial SensorSerial(2);
+
 Preferences prefs;
 
 // ---------- GPS + COMPASS ----------
@@ -43,6 +45,14 @@ constexpr float TURN_KP = 3.0;
 #define EEPROM_SIZE 128
 #define CALIB_FLAG_ADDR 0
 #define CALIB_DATA_ADDR 1
+
+// ESP32 Connection
+constexpr int SensorRxPin = 32;
+constexpr int SensorTxPin = 33;
+constexpr uint32_t SensorBaud = 115200;
+
+unsigned long lastGpsSendToSensorMs = 0;
+constexpr unsigned long GPS_SEND_INTERVAL_MS = 1000;
 #pragma endregion
 
 adafruit_bno055_offsets_t calibData;
@@ -229,8 +239,9 @@ void driveToWaypoint(double targetLat, double targetLon) {
     Serial.println("Reached waypoint");
     stopBoat();
 
+    startSensorProfileAtCurrentLocation(); 
     waitingAtWaypoint = true;
-    waitStartTime = millis();
+
     return;
   }
 
@@ -271,10 +282,57 @@ void driveToWaypoint(double targetLat, double targetLon) {
 }
 #pragma endregion
 
+#pragma region ESP32 Communication
+void sendGpsToSensorEsp() {
+  if (!gps.location.isValid()) {
+    return;
+  }
+
+  SensorSerial.print("NAV_GPS,");
+  SensorSerial.print(gps.location.lat(), 7);
+  SensorSerial.print(",");
+  SensorSerial.println(gps.location.lng(), 7);
+}
+
+void startSensorProfileAtCurrentLocation() {
+  SensorSerial.print("NAV_GPS,");
+  SensorSerial.print(gps.location.lat(), 7);
+  SensorSerial.print(",");
+  SensorSerial.println(gps.location.lng(), 7);
+
+  delay(100);
+
+  SensorSerial.println("START_PROFILE");
+}
+
+bool sensorProfileDone() {
+  if (!SensorSerial.available()) {
+    return false;
+  }
+
+  String msg = SensorSerial.readStringUntil('\n');
+  msg.trim();
+
+  Serial.print("Sensor ESP says: ");
+  Serial.println(msg);
+
+  if (msg == "PROFILE_DONE") {
+    return true;
+  }
+
+  if (msg == "PROFILE_FAILED") {
+    return true; // or handle failure differently
+  }
+
+  return false;
+}
+#pragma endregion
+
 #pragma region Setup
 // ---------- SETUP ----------
 void setup() {
   Serial.begin(115200);
+  SensorSerial.begin(SensorBaud, SERIAL_8N1, SensorRxPin, SensorTxPin);
 
 
   ESP32PWM::allocateTimer(0);
@@ -290,7 +348,7 @@ void setup() {
 
   Serial.println("Arming ESCs...");
   stopBoat();
-  delay(5000);
+  delay(1000);
 
   Wire.begin(21, 22);
   Wire.setClock(100000);
@@ -308,7 +366,7 @@ void setup() {
 
   loadCalibration();
 
-  delay(1000);
+  delay(500);
   bno.setExtCrystalUse(true);
 
   Serial.println("Ready");
@@ -324,7 +382,7 @@ void loop() {
     Serial.print("Waiting for GPS. Sats: ");
     Serial.println(gps.satellites.value());
     stopBoat();
-    delay(500);
+    delay(200);
     return;
   }
 
@@ -336,17 +394,20 @@ void loop() {
   }
 
   if (waitingAtWaypoint) {
-    stopBoat();
+    if (waitingAtWaypoint) {
+      stopBoat();
+      updateGPS();
 
-    if (millis() - waitStartTime >= WAIT_TIME_MS) {
-      currentWaypoint++;
-      waitingAtWaypoint = false;
+      if (millis() - lastGpsSendToSensorMs >= GPS_SEND_INTERVAL_MS) {
+        sendGpsToSensorEsp();
+        lastGpsSendToSensorMs = millis();
+      }
 
-      Serial.print("Going to next waypoint: ");
-      Serial.println(currentWaypoint);
+      if (sensorProfileDone()) {
+        waitingAtWaypoint = false;
+        currentWaypoint++;
+      }
     }
-
-    delay(200);
     return;
   }
 
