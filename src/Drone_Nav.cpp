@@ -53,6 +53,9 @@ constexpr uint32_t SensorBaud = 115200;
 
 unsigned long lastGpsSendToSensorMs = 0;
 constexpr unsigned long GPS_SEND_INTERVAL_MS = 1000;
+
+bool atHome = false;
+bool returningHome = false;
 #pragma endregion
 
 adafruit_bno055_offsets_t calibData;
@@ -78,12 +81,18 @@ bool loadCalibration() {
 }
 #pragma endregion
 
+#pragma region Waypoints
 // ---------- WAYPOINTS ----------
 double waypoints[][2] = {
   {56.458813, 9.402023},
   {56.458836, 9.401664},
   {56.459139, 9.401754}
 };
+
+// Home waypoint (for return after finishing)
+double HomeWaypoint[2] = {56.460527, 9.423643};
+
+#pragma endregion
 
 constexpr int WAYPOINT_COUNT = sizeof(waypoints) / sizeof(waypoints[0]);
 
@@ -236,11 +245,19 @@ void driveToWaypoint(double targetLat, double targetLon) {
 
   // If arrived, stop and wait
   if (distance <= ARRIVAL_RADIUS_METERS) {
+
+    if (currentWaypoint >= WAYPOINT_COUNT) {
+      if (returningHome) {
+         atHome = true;     
+      }
+    }
     Serial.println("Reached waypoint");
     stopBoat();
 
-    startSensorProfileAtCurrentLocation(); 
+  if (!returningHome) {
+    startSensorProfileAtCurrentLocation();
     waitingAtWaypoint = true;
+  }
 
     return;
   }
@@ -388,8 +405,21 @@ void loop() {
 
   if (currentWaypoint >= WAYPOINT_COUNT) {
     Serial.println("All waypoints reached");
-    stopBoat();
-    delay(1000);
+    returningHome = true;
+
+    double homeTargetLat = HomeWaypoint[0];
+    double homeTargetLon = HomeWaypoint[1]; 
+
+    driveToWaypoint(homeTargetLat, homeTargetLon);
+    
+    if (atHome) {
+      stopBoat();
+      while(true){
+        Serial.println("Returned home, stopping boat");
+        delay(5000);
+      }
+    }
+
     return;
   }
 
