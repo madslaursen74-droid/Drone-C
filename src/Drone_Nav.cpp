@@ -113,23 +113,31 @@ void updateGPS() {
   }
 }
 
+void startSensorProfileAtCurrentLocation();
+
 #pragma region Boat functions
 // ---------- MOTOR CONTROL ----------
 void setMotors(int leftUs, int rightUs) {
   leftUs = constrain(leftUs, ESC_MIN_US, ESC_MAX_US);
   rightUs = constrain(rightUs, ESC_MIN_US, ESC_MAX_US);
 
-  leftEsc.writeMicroseconds(leftUs);
-  rightEsc.writeMicroseconds(rightUs);
+  int leftAngle = map(leftUs, ESC_MIN_US, ESC_MAX_US, 0, 180);
+  int rightAngle = map(rightUs, ESC_MIN_US, ESC_MAX_US, 0, 180);
+
+  leftEsc.write(leftAngle);
+  rightEsc.write(rightAngle);
 
   Serial.print("Left: ");
-  Serial.print(leftUs);
+  Serial.print(leftAngle);
   Serial.print(" Right: ");
-  Serial.println(rightUs);
+  Serial.println(rightAngle);
 }
 
 void stopBoat() {
-  setMotors(ESC_STOP_US, ESC_STOP_US);
+  leftEsc.write(90);
+  rightEsc.write(90);
+
+  Serial.println("Left: 90 Right: 90");
 }
 #pragma endregion
 
