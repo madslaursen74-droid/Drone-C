@@ -38,7 +38,7 @@ constexpr float SLOW_DISTANCE_METERS  = 8.0;
 constexpr float HEADING_DEADBAND      = 8.0;
 constexpr float HEADING_OFFSET = 171.0;  // tune this value
 
-// Higher = turns harder for same angle error
+// ajustable settings
 constexpr float TURN_KP = 3.0;
 
 // Load BNO055 calibration data from EEPROM
@@ -84,13 +84,14 @@ bool loadCalibration() {
 #pragma region Waypoints
 // ---------- WAYPOINTS ----------
 double waypoints[][2] = {
-  {56.458813, 9.402023},
-  {56.458836, 9.401664},
-  {56.459139, 9.401754}
+  {56.467625, 9.433112},
+  {56.467637, 9.432909},
+  {56.467730, 9.432796}
 };
 
+
 // Home waypoint (for return after finishing)
-double HomeWaypoint[2] = {56.460527, 9.423643};
+double HomeWaypoint[2] = {56.467739, 9.433014};
 
 #pragma endregion
 
@@ -216,6 +217,52 @@ void printCalibration() {
   Serial.println(mag);
 }
 
+#pragma region ESP32 Communication
+void sendGpsToSensorEsp() {
+  if (!gps.location.isValid()) {
+    return;
+  }
+
+  SensorSerial.print("NAV_GPS,");
+  SensorSerial.print(gps.location.lat(), 7);
+  SensorSerial.print(",");
+  SensorSerial.println(gps.location.lng(), 7);
+}
+
+void startSensorProfileAtCurrentLocation() {
+  SensorSerial.print("NAV_GPS,");
+  SensorSerial.print(gps.location.lat(), 7);
+  SensorSerial.print(",");
+  SensorSerial.println(gps.location.lng(), 7);
+
+  delay(100);
+
+  SensorSerial.println("START_PROFILE");
+}
+
+bool sensorProfileDone() {
+  if (!SensorSerial.available()) {
+    return false;
+  }
+
+  String msg = SensorSerial.readStringUntil('\n');
+  msg.trim();
+
+  Serial.print("Sensor ESP says: ");
+  Serial.println(msg);
+
+  if (msg == "PROFILE_DONE") {
+    return true;
+  }
+
+  if (msg == "PROFILE_FAILED") {
+    return true; // or handle failure differently
+  }
+
+  return false;
+}
+#pragma endregion
+
 #pragma region Boat Movement
 // ---------- DRIVE TOWARDS WAYPOINT ----------
 void driveToWaypoint(double targetLat, double targetLon) {
@@ -299,52 +346,6 @@ void driveToWaypoint(double targetLat, double targetLon) {
 }
 #pragma endregion
 
-#pragma region ESP32 Communication
-void sendGpsToSensorEsp() {
-  if (!gps.location.isValid()) {
-    return;
-  }
-
-  SensorSerial.print("NAV_GPS,");
-  SensorSerial.print(gps.location.lat(), 7);
-  SensorSerial.print(",");
-  SensorSerial.println(gps.location.lng(), 7);
-}
-
-void startSensorProfileAtCurrentLocation() {
-  SensorSerial.print("NAV_GPS,");
-  SensorSerial.print(gps.location.lat(), 7);
-  SensorSerial.print(",");
-  SensorSerial.println(gps.location.lng(), 7);
-
-  delay(100);
-
-  SensorSerial.println("START_PROFILE");
-}
-
-bool sensorProfileDone() {
-  if (!SensorSerial.available()) {
-    return false;
-  }
-
-  String msg = SensorSerial.readStringUntil('\n');
-  msg.trim();
-
-  Serial.print("Sensor ESP says: ");
-  Serial.println(msg);
-
-  if (msg == "PROFILE_DONE") {
-    return true;
-  }
-
-  if (msg == "PROFILE_FAILED") {
-    return true; // or handle failure differently
-  }
-
-  return false;
-}
-#pragma endregion
-
 #pragma region Setup
 // ---------- SETUP ----------
 void setup() {
@@ -411,6 +412,8 @@ void loop() {
     double homeTargetLon = HomeWaypoint[1]; 
 
     driveToWaypoint(homeTargetLat, homeTargetLon);
+
+    delay(200);
     
     if (atHome) {
       stopBoat();
@@ -437,6 +440,7 @@ void loop() {
         waitingAtWaypoint = false;
         currentWaypoint++;
       }
+      delay(200);
     }
     return;
   }
