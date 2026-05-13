@@ -328,14 +328,6 @@ delay(3000);
 
  
 
-void loop() {
-
- 
-
-}
-
- 
-
 void stop(){
 
   portThruster.write(90);
