@@ -20,7 +20,7 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 #pragma region Variables and Constants
 // ---------- MOTOR PINS ----------
 constexpr int LEFT_ESC_PIN  = 4;
-constexpr int RIGHT_ESC_PIN = 18;
+constexpr int RIGHT_ESC_PIN = 16;
 
 // ---------- ESC VALUES ----------
 constexpr int ESC_MIN_US     = 1000;
@@ -36,7 +36,7 @@ constexpr int MAX_TURN_POWER = 180;
 constexpr float ARRIVAL_RADIUS_METERS = 3.0;
 constexpr float SLOW_DISTANCE_METERS  = 8.0;
 constexpr float HEADING_DEADBAND      = 8.0;
-constexpr float HEADING_OFFSET = 171.0;  // tune this value
+constexpr float HEADING_OFFSET = 94.0;  // tune this value
 
 // ajustable settings
 constexpr float TURN_KP = 3.0;
@@ -47,8 +47,8 @@ constexpr float TURN_KP = 3.0;
 #define CALIB_DATA_ADDR 1
 
 // ESP32 Connection
-constexpr int SensorRxPin = 32;
-constexpr int SensorTxPin = 33;
+constexpr int SensorRxPin = 10;
+constexpr int SensorTxPin = 9;
 constexpr uint32_t SensorBaud = 115200;
 
 unsigned long lastGpsSendToSensorMs = 0;
@@ -84,7 +84,7 @@ bool loadCalibration() {
 #pragma region Waypoints
 // ---------- WAYPOINTS ----------
 double waypoints[][2] = {
-  {56.467625, 9.433112},
+  {56.472961, 9.435084},
   {56.467637, 9.432909},
   {56.467730, 9.432796}
 };
@@ -113,8 +113,6 @@ void updateGPS() {
   }
 }
 
-void startSensorProfileAtCurrentLocation();
-
 #pragma region Boat functions
 // ---------- MOTOR CONTROL ----------
 void setMotors(int leftUs, int rightUs) {
@@ -138,6 +136,27 @@ void stopBoat() {
   rightEsc.write(90);
 
   Serial.println("Left: 90 Right: 90");
+}
+
+void armEscs() {
+  Serial.println("Arming sequence started...");
+
+  leftEsc.write(0);
+  rightEsc.write(0);
+  Serial.println("Arming: Left 0 Right 0");
+  delay(3000);
+
+  leftEsc.write(180);
+  rightEsc.write(180);
+  Serial.println("Arming: Left 180 Right 180");
+  delay(2000);
+
+  leftEsc.write(90);
+  rightEsc.write(90);
+  Serial.println("Arming: Left 90 Right 90");
+  delay(2000);
+
+  Serial.println("Arming sequence done.");
 }
 #pragma endregion
 
@@ -298,6 +317,9 @@ void driveToWaypoint(double targetLat, double targetLon) {
   Serial.print("Turn error: ");
   Serial.println(headingError);
 
+  Serial.print("Angle: ");
+  Serial.println(headingError);
+
   // If arrived, stop and wait
   if (distance <= ARRIVAL_RADIUS_METERS) {
 
@@ -334,15 +356,18 @@ void driveToWaypoint(double targetLat, double targetLon) {
     // Turn right
     leftSpeed  = baseSpeed + turnPower;
     rightSpeed = baseSpeed - turnPower;
+    Serial.println("Motor direction: RIGHT");
     Serial.println("Turning RIGHT");
   }
   else if (headingError < 0) {
     // Turn left
     leftSpeed  = baseSpeed - turnPower;
     rightSpeed = baseSpeed + turnPower;
+    Serial.println("Motor direction: LEFT");
     Serial.println("Turning LEFT");
   }
   else {
+    Serial.println("Motor direction: STRAIGHT");
     Serial.println("Going STRAIGHT");
   }
 
@@ -372,9 +397,7 @@ void setup() {
   leftEsc.attach(LEFT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
   rightEsc.attach(RIGHT_ESC_PIN, ESC_MIN_US, ESC_MAX_US);
 
-  Serial.println("Arming ESCs...");
-  stopBoat();
-  delay(1000);
+  armEscs();
 
   Wire.begin(21, 22);
   Wire.setClock(100000);
