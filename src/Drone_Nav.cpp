@@ -91,12 +91,16 @@ double waypoints[][2] = {
 
 
 // Home waypoint (for return after finishing)
-double HomeWaypoint[2] = {56.467739, 9.433014};
+double HomeWaypoint[][2] = {{56.468012, 9.433656},
+                            {56.468012, 9.433656}};
+                            
 
 #pragma endregion
 
 constexpr int WAYPOINT_COUNT = sizeof(waypoints) / sizeof(waypoints[0]);
+constexpr int HomeWaypointCount = sizeof(HomeWaypoint) / sizeof(HomeWaypoint[0]);
 
+int currentHomeWaypoints = 0;
 int currentWaypoint = 0;
 bool waitingAtWaypoint = false;
 unsigned long waitStartTime = 0;
@@ -323,13 +327,17 @@ void driveToWaypoint(double targetLat, double targetLon) {
   // If arrived, stop and wait
   if (distance <= ARRIVAL_RADIUS_METERS) {
 
-    if (currentWaypoint >= WAYPOINT_COUNT) {
+    if (currentWaypoint >= WAYPOINT_COUNT && currentHomeWaypoints >= HomeWaypointCount) {
       if (returningHome) {
          atHome = true;     
       }
     }
     Serial.println("Reached waypoint");
     stopBoat();
+
+  if (returningHome) {
+    currentHomeWaypoints++;
+  }
 
   if (!returningHome) {
     startSensorProfileAtCurrentLocation();
@@ -439,8 +447,8 @@ void loop() {
     Serial.println("All waypoints reached");
     returningHome = true;
 
-    double homeTargetLat = HomeWaypoint[0];
-    double homeTargetLon = HomeWaypoint[1]; 
+    double homeTargetLat = HomeWaypoint[currentHomeWaypoints][0];
+    double homeTargetLon = HomeWaypoint[currentHomeWaypoints][1]; 
 
     driveToWaypoint(homeTargetLat, homeTargetLon);
 
